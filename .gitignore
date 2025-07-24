@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Logs
+logs/
+*.log
+
+# Google Cloud Credentials (NEVER commit these!)
+*.json
+*credentials*
+*service-account*
+
+# ngrok
+ngrok.exe
+ngrok
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Configuration files (may contain sensitive data)
+config.py
+
+# Temporary files
+*.tmp
+*.temp 

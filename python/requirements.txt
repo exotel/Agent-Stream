@@ -1,6 +1,9 @@
-Flask==1.1.1
-Flask-Sockets==0.2.1
-gevent==1.4.0
-gevent-websocket==0.10.1
-greenlet==0.4.15
-google-cloud-speech
+# Basic WebSocket server dependencies
+websockets>=12.0
+
+# Optional: For advanced logging and HTTP endpoints
+Flask>=2.3.0
+
+# Optional: For Google Speech-to-Text (unidirectional mode only)
+# Uncomment the line below if you need speech recognition
+# google-cloud-speech>=2.21.0
