@@ -1,0 +1,69 @@
+# Environment files (contain sensitive information)
+.env
+.env.local
+.env.production
+
+# API Keys and secrets
+*.key
+secrets.txt
+config_private.py
+
+# Logs
+*.log
+logs/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Audio files (if any temporary audio is generated)
+*.wav
+*.mp3
+*.m4a
+
+# Temporary files
+tmp/
+temp/
+*.tmp 

@@ -12,8 +12,8 @@ The error you encountered:
 ## 🔧 **SOLUTION IMPLEMENTED**
 
 ### **1. Fixed IP Address Issue**
-- ✅ **Your Public IP**: `125.19.101.115`
-- ✅ **Correct WebSocket URL**: `ws://125.19.101.115:5000/media`
+- ✅ **Your Public IP**: `your-server-ip`
+- ✅ **Correct WebSocket URL**: `ws://your-server-ip:5000/media`
 - ✅ **Server configured to bind to all interfaces** (`0.0.0.0`)
 
 ### **2. Comprehensive Logging System**
@@ -33,16 +33,16 @@ The error you encountered:
 
 ### **WebSocket URL to Use:**
 ```
-ws://125.19.101.115:5000/media
+ws://your-server-ip:5000/media
 ```
 
 ### **In Your Exotel Flow:**
 1. **For Bidirectional Streaming** (Voicebot Applet):
-   - URL: `ws://125.19.101.115:5000/media`
+   - URL: `ws://your-server-ip:5000/media`
    - This will echo audio back to the caller
 
 2. **For Unidirectional Streaming** (Stream Applet):
-   - URL: `ws://125.19.101.115:5000/media`
+   - URL: `ws://your-server-ip:5000/media`
    - This will transcribe speech in real-time
 
 ## 🚀 **HOW TO START THE SERVER**
@@ -147,8 +147,8 @@ voice-streaming/
 
 Your server is now ready and should work with Exotel. The key fixes:
 
-1. ✅ **Correct IP address** (`125.19.101.115`)
-2. ✅ **Proper WebSocket URL** (`ws://125.19.101.115:5000/media`)
+1. ✅ **Correct IP address** (`your-server-ip`)
+2. ✅ **Proper WebSocket URL** (`ws://your-server-ip:5000/media`)
 3. ✅ **Comprehensive logging** with timestamps
 4. ✅ **Enhanced error handling**
 5. ✅ **Server binding to all interfaces** (`0.0.0.0`)

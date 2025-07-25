@@ -1,9 +1,31 @@
 # Basic WebSocket server dependencies
 websockets>=12.0
 
-# Optional: For advanced logging and HTTP endpoints
+# Flask for HTTP endpoints (optional)
 Flask>=2.3.0
 
-# Optional: For Google Speech-to-Text (unidirectional mode only)
-# Uncomment the line below if you need speech recognition
-# google-cloud-speech>=2.21.0
+# NLP and AI libraries for sales bot
+openai>=1.0.0
+speech-recognition>=3.10.0
+pydub>=0.25.1
+nltk>=3.8.1
+spacy>=3.7.0
+transformers>=4.30.0
+textblob>=0.17.1
+
+# Text-to-Speech
+gTTS>=2.3.0
+pygame>=2.5.0
+
+# Additional utilities
+python-dotenv>=1.0.0
+requests>=2.31.0
+numpy>=1.24.0
+
+# Google Speech-to-Text (optional - for better transcription)
+google-cloud-speech>=2.21.0
+google-cloud-texttospeech>=2.14.0
+
+# Audio processing
+librosa>=0.10.0
+scipy>=1.11.0
