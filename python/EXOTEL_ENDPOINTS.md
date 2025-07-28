@@ -9,6 +9,7 @@ Local: ws://localhost:5000
 ```
 
 **✅ Ready for Exotel Voice Streaming!**
+**✅ Ready for Exotel Voice Streaming!**
 
 ---
 
