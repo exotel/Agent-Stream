@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Configuration Settings - Production Ready
-========================================
+Exotel AgentStream - Configuration Settings
+===========================================
 
-Centralized configuration management for the OpenAI Realtime Bot.
+Copyright (c) 2025 Exotel Techcom Pvt. Ltd.
+Licensed under the MIT License.
+
+Centralized configuration management for the Exotel AgentStream OpenAI integration.
 All settings are loaded from environment variables with sensible defaults.
 
 Environment Variables:

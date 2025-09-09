@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-OpenAI Realtime Bot - Production Ready
-====================================
+Exotel AgentStream - OpenAI Realtime Bot Integration
+===================================================
+
+Copyright (c) 2025 Exotel Techcom Pvt. Ltd.
+Licensed under the MIT License.
 
 A production-ready WebSocket bot that integrates with OpenAI's Realtime API
-for voice conversations. Optimized for Exotel telephony integration with
-support for multiple sample rates and adaptive chunk sizing.
+for voice conversations. Optimized for Exotel AgentStream voice streaming
+platform with support for multiple sample rates and adaptive chunk sizing.
 
 Features:
 - Multi-sample rate support (8kHz, 16kHz, 24kHz)
