@@ -1,0 +1,78 @@
+# OpenAI Realtime Bot - Production Requirements
+# ============================================
+# 
+# Core dependencies for the OpenAI Realtime Bot framework
+# All versions are pinned for production stability
+#
+# Last updated: 2024-12-17
+# Python version: 3.8+
+
+# Core WebSocket and HTTP libraries
+websockets==12.0
+aiohttp==3.9.1
+asyncio-mqtt==0.16.1
+
+# OpenAI API client
+openai==1.6.1
+
+# Audio processing
+numpy==1.24.3
+scipy==1.11.4
+librosa==0.10.1
+soundfile==0.12.1
+pyaudio==0.2.11
+
+# Configuration and environment
+python-dotenv==1.0.0
+pydantic==2.5.2
+pydantic-settings==2.1.0
+
+# Logging and monitoring
+structlog==23.2.0
+prometheus-client==0.19.0
+
+# HTTP server and utilities
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+gunicorn==21.2.0
+
+# Database (optional - for session storage)
+sqlalchemy==2.0.23
+alembic==1.13.1
+psycopg2-binary==2.9.9  # PostgreSQL
+redis==5.0.1  # Redis for caching
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+httpx==0.25.2
+
+# Development tools
+black==23.11.0
+flake8==6.1.0
+mypy==1.7.1
+pre-commit==3.6.0
+
+# Security
+cryptography==41.0.8
+python-jose[cryptography]==3.3.0
+
+# Deployment and containerization
+docker==6.1.3
+kubernetes==28.1.0
+
+# Monitoring and observability
+sentry-sdk==1.38.0
+datadog==0.48.0
+
+# Telephony integrations (optional)
+twilio==8.10.3
+# exotel-python  # Add if available
+
+# Load testing (development)
+locust==2.17.0
+
+# Documentation
+sphinx==7.2.6
+sphinx-rtd-theme==1.3.0 
