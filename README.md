@@ -1,4 +1,4 @@
-# 🤖 OpenAI Realtime Sales Bot with Exotel to Test AgentStream
+# 🤖 OpenAI Realtime Sample Sales Bot with Exotel to Test AgentStream
 
 A production-ready, conversational AI sales bot that bridges **Exotel's WebSocket streaming** with **OpenAI's Realtime API** for natural, speech-to-speech conversations over phone calls.
 
