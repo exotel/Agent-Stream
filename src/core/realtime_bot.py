@@ -12,7 +12,7 @@ A production-ready WebSocket bot that integrates with OpenAI's Realtime API
 for voice conversations. Optimized for Exotel AgentStream voice streaming
 platform with support for multiple sample rates and adaptive chunk sizing.
 
-WSS Endpoint Configuration for Exotel Voicebot Applet:
+WSS Endpoint Configuration for Exotel Voicebot Applet:(Defining query param ?sample-rate=xxxx in voicebot applet at Exotel would help Exotel to handle the defined sample rate)
 - wss://your-domain.com/?sample-rate=8000   (Standard PSTN)
 - wss://your-domain.com/?sample-rate=16000  (Enhanced quality)
 - wss://your-domain.com/?sample-rate=24000  (HD quality - Beta)
