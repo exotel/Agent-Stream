@@ -6,7 +6,7 @@ This guide covers deploying the OpenAI Realtime Bot Framework in various environ
 
 ## WSS Endpoint Configuration for Exotel
 
-When deploying, ensure your WSS endpoints support the following sample rate parameters:
+When deploying, ensure your WSS endpoints support the following sample rate parameters:(Defining query param ?sample-rate=xxxx in voicebot applet at Exotel would help Exotel to handle the defined sample rate)
 
 ```
 wss://your-domain.com/?sample-rate=8000   # Standard PSTN
