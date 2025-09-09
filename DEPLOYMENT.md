@@ -1,6 +1,18 @@
 # Deployment Guide
 
-This guide covers deploying the OpenAI Realtime Bot Framework in various environments.
+**SAMPLE CODE FOR TESTING AND DEVELOPMENT**
+
+This guide covers deploying the OpenAI Realtime Bot Framework in various environments. This is sample code designed for testing Exotel AgentStream integration. Customers should use this as a foundation and modify according to their specific business requirements and security policies.
+
+## WSS Endpoint Configuration for Exotel
+
+When deploying, ensure your WSS endpoints support the following sample rate parameters:
+
+```
+wss://your-domain.com/?sample-rate=8000   # Standard PSTN
+wss://your-domain.com/?sample-rate=16000  # Enhanced quality  
+wss://your-domain.com/?sample-rate=24000  # HD quality (Beta)
+```
 
 ## Prerequisites
 

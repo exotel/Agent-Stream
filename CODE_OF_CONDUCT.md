@@ -1,6 +1,10 @@
 # Code of Conduct
 
+**SAMPLE CODE FOR TESTING AND DEVELOPMENT**
+
 ## OpenAI Realtime Bot Framework - Ethical Usage Guidelines
+
+This framework is sample code designed for testing Exotel AgentStream integration. Customers should use this as a foundation and modify according to their specific business requirements and compliance needs.
 
 **Version**: 2.0.0 
 **Effective Date**: December 17, 2024 

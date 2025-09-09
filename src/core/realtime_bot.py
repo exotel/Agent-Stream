@@ -3,12 +3,19 @@
 Exotel AgentStream - OpenAI Realtime Bot Integration
 ===================================================
 
+SAMPLE CODE FOR TESTING AND DEVELOPMENT
+
 Copyright (c) 2025 Exotel Techcom Pvt. Ltd.
 Licensed under the MIT License.
 
 A production-ready WebSocket bot that integrates with OpenAI's Realtime API
 for voice conversations. Optimized for Exotel AgentStream voice streaming
 platform with support for multiple sample rates and adaptive chunk sizing.
+
+WSS Endpoint Configuration for Exotel Voicebot Applet:
+- wss://your-domain.com/?sample-rate=8000   (Standard PSTN)
+- wss://your-domain.com/?sample-rate=16000  (Enhanced quality)
+- wss://your-domain.com/?sample-rate=24000  (HD quality - Beta)
 
 Features:
 - Multi-sample rate support (8kHz, 16kHz, 24kHz)
@@ -55,9 +62,9 @@ class OpenAIRealtimeBot:
  This bot handles WebSocket connections from telephony providers (like Exotel),
  processes audio streams, and integrates with OpenAI's Realtime API for
  natural voice conversations.
-     """
+               """
 
-        def __init__(self):
+    def __init__(self):
         """Initialize the bot with production configuration."""
         # Core configuration
         self.openai_api_key = Config.OPENAI_API_KEY
