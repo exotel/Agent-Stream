@@ -4,7 +4,7 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Production Ready](https://img.shields.io/badge/status-production--ready-green.svg)]()
 
-A production-ready WebSocket bot framework that integrates with OpenAI's Realtime API for high-quality voice conversations. Optimized for telephony providers like Exotel, Twilio, and others.
+A production-ready WebSocket bot framework that integrates with OpenAI's Realtime API for high-quality voice conversations. Optimized for Exotel telephony
 
 ## Features
 
@@ -13,7 +13,7 @@ A production-ready WebSocket bot framework that integrates with OpenAI's Realtim
 - **High-Quality Audio**: 24kHz processing with automatic upsampling
 - **Production Architecture**: Scalable, secure, and monitored
 - **Multiple Bot Types**: Sales, Support, Qualification, Collection bots
-- **Telephony Integration**: Ready for Exotel, Twilio, and other providers
+- **Telephony Integration**: Ready for Exotel
 - **Real-time Processing**: Low-latency voice conversations
 - **Robust Error Handling**: Comprehensive logging and monitoring
 - **Docker Support**: Containerized deployment ready
@@ -121,7 +121,7 @@ Response (24kHz) ← Telephony Provider ← Downsampling ← OpenAI Response
 
 - Python 3.8 or higher
 - OpenAI API key with Realtime API access
-- Telephony provider account (Exotel, Twilio, etc.)
+- Telephony provider account (Exotel)
 - ngrok or similar tunneling service (for development)
 
 ### Development Setup
