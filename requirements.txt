@@ -67,7 +67,7 @@ sentry-sdk==1.38.0
 datadog==0.48.0
 
 # Telephony integrations (optional)
-twilio==8.10.3
+Exotel Telephony and AgentStream
 # exotel-python  # Add if available
 
 # Load testing (development)
