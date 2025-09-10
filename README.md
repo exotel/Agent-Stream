@@ -821,7 +821,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Documentation**: [Full documentation](docs/)
 - **Issues**: [GitHub Issues](https://github.com/yourusername/openai-realtime-bot/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/yourusername/openai-realtime-bot/discussions)
-- **Email**: support@yourcompany.com
+- **Email**: hello@exotel.com
 
 ---
 
