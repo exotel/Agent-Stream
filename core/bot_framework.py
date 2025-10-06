@@ -30,6 +30,9 @@ import yaml
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
 from config import Config
 
 logger = logging.getLogger(__name__)

@@ -17,7 +17,10 @@ import json
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from bot_framework import BotManager, BotType, BotPersonality
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+from core.bot_framework import BotManager, BotType, BotPersonality
 
 class BotLauncher:
     """Universal launcher for creating and managing AI bots"""

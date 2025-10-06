@@ -20,6 +20,9 @@ import os
 import re
 from typing import Dict, Any, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
 from config import Config
 
 # Configure enhanced logging
@@ -35,6 +38,7 @@ class OpenAIRealtimeSalesBot:
         Config.validate()
         
         self.exotel_connections: Dict[str, Dict[str, Any]] = {}
+
         self.openai_connections: Dict[str, Any] = {}
         
         # Enhanced audio buffering with dynamic sample rate support
@@ -70,7 +74,12 @@ class OpenAIRealtimeSalesBot:
         
         try:
             # Extract sample rate from WebSocket path if available
-            detected_sample_rate = self._extract_sample_rate_from_path(path or websocket.path)
+            # Handle different websockets versions - path might be in websocket.path or passed as parameter
+            try:
+                websocket_path = path or getattr(websocket, 'path', '/')
+            except:
+                websocket_path = '/'
+            detected_sample_rate = self.default_sample_rate  # Use default sample rate
             logger.info(f"📞 NEW ENHANCED SALES CALL from Exotel: {websocket.remote_address}")
             logger.info(f"🎵 Detected sample rate: {detected_sample_rate}Hz")
             
@@ -102,7 +111,7 @@ class OpenAIRealtimeSalesBot:
                             "openai_connected": False,
                             "sample_rate": self.connection_sample_rates.get(stream_id, detected_sample_rate),
                             "chunk_size_bytes": self.connection_chunk_sizes.get(stream_id, 0),
-                            "path": path or websocket.path
+                            "path": websocket_path
                         }
                         logger.info(f"📞 NEW ENHANCED CONNECTION: {stream_id} @ {self.connection_sample_rates[stream_id]}Hz")
                     
@@ -135,36 +144,6 @@ class OpenAIRealtimeSalesBot:
         finally:
             logger.info(f"🧹 CLEANING UP ENHANCED CONNECTION: {stream_id}")
             await self.cleanup_connections(stream_id)
-
-    def _extract_sample_rate_from_path(self, path: str) -> int:
-        """
-        Extract sample rate from WebSocket path
-        Supports formats like:
-        - wss://yourdomain.ai/media?sample-rate=16000
-        - wss://yourdomain.ai/media?sample-rate=24000
-        """
-        if not path:
-            return self.default_sample_rate
-            
-        try:
-            # Parse query parameters from path
-            if '?' in path:
-                query_part = path.split('?', 1)[1]
-                params = parse_qs(query_part)
-                
-                # Check for sample-rate parameter
-                if 'sample-rate' in params:
-                    sample_rate = int(params['sample-rate'][0])
-                    if sample_rate in Config.SUPPORTED_SAMPLE_RATES:
-                        logger.info(f"🎵 DETECTED SAMPLE RATE FROM URL: {sample_rate}Hz")
-                        return sample_rate
-                    else:
-                        logger.warning(f"⚠️ UNSUPPORTED SAMPLE RATE: {sample_rate}Hz, using {self.default_sample_rate}Hz")
-                
-        except Exception as e:
-            logger.error(f"❌ Error parsing sample rate from path '{path}': {e}")
-        
-        return self.default_sample_rate
 
     def _initialize_connection_settings(self, stream_id: str, sample_rate: int, start_data: dict):
         """Initialize enhanced connection settings based on detected parameters"""
@@ -322,7 +301,7 @@ class OpenAIRealtimeSalesBot:
         try:
             # Get OpenAI connection config
             openai_config = self.openai_connections[stream_id]
-            input_format = openai_config.get("input_format", "g711_ulaw")
+            input_format = openai_config.get("input_format", "raw/slin")
             
             # Convert audio based on sample rate and format
             if input_format == "pcm16" and sample_rate >= 16000:
@@ -556,7 +535,7 @@ class OpenAIRealtimeSalesBot:
             response_msg = {
                 "type": "response.create",
                 "response": {
-                    "modalities": ["audio"],
+                    "modalities": ["audio", "text"],
                     "instructions": "Give a warm, professional greeting. Keep it concise and natural."
                 }
             }
@@ -630,7 +609,7 @@ class OpenAIRealtimeSalesBot:
             response_create = {
                 "type": "response.create",
                 "response": {
-                    "modalities": ["audio"],
+                    "modalities": ["audio", "text"],
                     "instructions": "Respond naturally and conversationally. Use appropriate pauses and inflections.",
                     "voice": self.openai_voice,
                     "temperature": Config.TEMPERATURE
@@ -656,7 +635,7 @@ class OpenAIRealtimeSalesBot:
             
             # Get connection settings
             sample_rate = self.connection_sample_rates.get(stream_id, self.default_sample_rate)
-            output_format = self.openai_connections[stream_id].get("output_format", "g711_ulaw")
+            output_format = self.openai_connections[stream_id].get("output_format", "raw/slin")
             
             # Decode audio based on format
             openai_audio = base64.b64decode(audio_delta)
@@ -731,7 +710,7 @@ class OpenAIRealtimeSalesBot:
             response_msg = {
                 "type": "response.create",
                 "response": {
-                    "modalities": ["audio"],
+                    "modalities": ["audio", "text"],
                     "instructions": f"Based on the function result, provide a natural response to the customer about {function_name}."
                 }
             }
@@ -1008,6 +987,45 @@ class OpenAIRealtimeSalesBot:
         
         return struct.pack(f'<{len(pcm_samples)}h', *pcm_samples)
 
+
+    async def start_server(self):
+        """Start the WebSocket server"""
+        try:
+            logger.info(f'🚀 Starting Enhanced Sales Bot Server on {Config.SERVER_HOST}:{Config.SERVER_PORT}')
+            logger.info('📞 Ready for Enhanced Exotel streaming connections!')
+            logger.info('🎵 Multi-sample rate support: 8kHz, 16kHz, 24kHz')
+            logger.info('📦 Variable chunk sizes: minimum 20ms')
+            logger.info('✨ Enhanced mark/clear event handling')
+            logger.info('🔐 Using secure environment-based configuration')
+            
+            # Start WebSocket server
+            async with websockets.serve(
+                self.handle_exotel_websocket,
+                Config.SERVER_HOST,
+                Config.SERVER_PORT
+            ):
+                logger.info(f'✅ Enhanced Sales Bot Server running at ws://{Config.SERVER_HOST}:{Config.SERVER_PORT}')
+                logger.info('🎯 Ready for enhanced calls with multi-sample rate support...')
+                await asyncio.Future()  # Run forever
+                
+        except Exception as e:
+            logger.error(f'❌ Enhanced Server Error: {e}')
+            raise
+
+    async def handle_exotel_dtmf(self, message: Dict[str, Any], stream_id: str):
+        """Handle DTMF events from Exotel"""
+        try:
+            dtmf_data = message.get('dtmf', {})
+            digit = dtmf_data.get('digit', '')
+            duration = dtmf_data.get('duration', '')
+            
+            logger.info(f'📞 DTMF received: {digit} (duration: {duration}ms) for {stream_id}')
+            
+            # Handle DTMF logic here
+            # For now, just acknowledge
+            
+        except Exception as e:
+            logger.error(f'❌ Error handling DTMF: {e}')
     async def cleanup_connections(self, stream_id: str):
         """Enhanced cleanup of both Exotel and OpenAI connections"""
         try:
@@ -1038,6 +1056,9 @@ class OpenAIRealtimeSalesBot:
         except Exception as e:
             logger.error(f"❌ Error during enhanced cleanup: {e}")
 
+
+
+
 async def main():
     """Enhanced main function to start the OpenAI Realtime Sales Bot"""
     try:
@@ -1045,30 +1066,12 @@ async def main():
         sales_bot = OpenAIRealtimeSalesBot()
         
         # Start the enhanced WebSocket server
-        logger.info(f"🚀 Starting Enhanced Sales Bot Server on {Config.SERVER_HOST}:{Config.SERVER_PORT}")
-        logger.info("📞 Ready for Enhanced Exotel streaming connections!")
-        logger.info("🎵 Multi-sample rate support: 8kHz, 16kHz, 24kHz")
-        logger.info("📦 Variable chunk sizes: minimum 20ms")
-        logger.info("✨ Enhanced mark/clear event handling")
-        logger.info("🔐 Using secure environment-based configuration")
+        await sales_bot.start_server()
         
-        async with websockets.serve(
-            sales_bot.handle_exotel_websocket,
-            Config.SERVER_HOST,
-            Config.SERVER_PORT
-        ):
-            logger.info(f"✅ Enhanced Sales Bot Server running at ws://{Config.SERVER_HOST}:{Config.SERVER_PORT}")
-            logger.info("🎯 Ready for enhanced calls with multi-sample rate support...")
-            
-            # Keep the server running
-            await asyncio.Future()  # Run forever
-            
-    except KeyboardInterrupt:
-        logger.info("⏹️ Enhanced server stopped by user")
-    except ValueError as e:
-        logger.error(f"❌ Enhanced Configuration Error: {e}")
     except Exception as e:
-        logger.error(f"❌ Enhanced Server Error: {e}")
+        logger.error(f'❌ Enhanced Server Error: {e}')
+        raise
+
 
 if __name__ == "__main__":
     asyncio.run(main()) 
