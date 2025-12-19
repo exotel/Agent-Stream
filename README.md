@@ -15,13 +15,29 @@ npm start               # Bot running!
 
 ## 🎯 Overview
 
-This framework enables you to build AI-powered voice bots that work with Exotel's bidirectional WebSocket streaming. Choose from multiple architectures based on your needs:
+This framework enables you to build AI-powered voice bots that work with Exotel's bidirectional WebSocket streaming. Choose from **7 production-ready bots**:
 
-| Architecture | Latency | Quality | Complexity | Best For |
-|--------------|---------|---------|------------|----------|
-| **[ElevenLabs Bridge](#elevenlabs-conversational-ai)** | ~750ms | ⭐⭐⭐⭐⭐ | Low | Production voice agents |
-| **[STT → LLM → TTS](#stt--llm--tts-pipeline)** | ~2-4s | ⭐⭐⭐⭐ | Medium | Custom AI logic |
-| **[Gemini Speech-to-Speech](#gemini-speech-to-speech)** | ~1-2s | ⭐⭐⭐⭐ | Medium | Multimodal AI |
+### 🏆 Available Bots
+
+| Bot | Latency | Type | Best For | Command |
+|-----|---------|------|----------|---------|
+| **[OpenAI Realtime](#openai-realtime-bot)** | ~500ms ⚡ | WebSocket S2S | **Fastest production bot** | `npm run openai-realtime` |
+| **[ElevenLabs Bridge](#elevenlabs-conversational-ai)** | ~750ms | WebSocket Agent | Best voice quality | `npm run elevenlabs-bot` |
+| **[Gemini S2S](#gemini-speech-to-speech)** | ~2-4s | HTTP Pipeline | Google AI ecosystem | `npm run gemini-bot` |
+| **[OpenAI Pipeline](#stt--llm--tts-pipeline)** | ~4s | HTTP Pipeline | Custom AI logic | `npm run s2s-bot` |
+| **[Simple Chat](#simple-conversation-bot)** | ~4s | HTTP Pipeline | Quick prototyping | `npm start` |
+| **Gemini Live** | ~600ms* | WebSocket S2S | Beta (needs access) | `npm run gemini-live` |
+| **Gemini + ElevenLabs** | ~3s | Hybrid | Experimental | `npm run gemini-eleven` |
+
+*\* Requires special API access*
+
+### Architecture Comparison
+
+| Architecture | How It Works | Pros | Cons |
+|--------------|--------------|------|------|
+| **Realtime (WebSocket)** | Direct speech-to-speech | Lowest latency, natural | Less customizable |
+| **Bridge (WebSocket)** | All-in-one AI agent | Best quality, easy setup | Vendor-specific |
+| **Pipeline (HTTP)** | STT → LLM → TTS chain | Full control, flexible | Higher latency |
 
 ---
 
@@ -78,6 +94,49 @@ npm run elevenlabs-bot    # ElevenLabs Conversational AI (~750ms)
 npm start                 # Simple GPT-4 conversation
 npm run gemini-bot        # Gemini + OpenAI TTS
 npm run s2s-bot           # OpenAI full pipeline
+```
+
+---
+
+## ⚡ OpenAI Realtime Bot
+
+### The Fastest Option (~500ms latency)
+
+The OpenAI Realtime bot uses **GPT-4o's native speech-to-speech** capability - no separate STT or TTS needed. Audio goes directly to OpenAI and comes back as speech.
+
+```
+┌──────────┐      ┌──────────────┐      ┌──────────────────────┐
+│  Exotel  │ WSS  │  Our Server  │ WSS  │  OpenAI Realtime API │
+│  (8kHz)  │ ───► │  (resample)  │ ───► │  gpt-4o-realtime     │
+│          │ ◄─── │  (24kHz↔8k)  │ ◄─── │  (24kHz native S2S)  │
+└──────────┘      └──────────────┘      └──────────────────────┘
+```
+
+### Setup
+
+```bash
+# Set your OpenAI API key
+OPENAI_API_KEY=sk-proj-your-key-here
+
+# Run the bot
+npm run openai-realtime
+```
+
+### Features
+
+- ✅ **True Speech-to-Speech** - No STT/TTS chain
+- ✅ **~500ms Latency** - Fastest response time
+- ✅ **Pre-cached Greeting** - Instant first response
+- ✅ **Barge-in Support** - Natural interruptions
+- ✅ **Function Calling** - Integrate with your APIs
+
+### Configuration
+
+Edit the instructions in `examples/openai-realtime-bot.js`:
+
+```javascript
+instructions: `You are a helpful customer service agent for Acme Corp.
+Keep responses brief (1-2 sentences). Be friendly and professional.`
 ```
 
 ---
