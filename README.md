@@ -1,6 +1,6 @@
-# Exotel Voice Bot Framework 🤖
+# Exotel AgentStream for Voice AI Framework 🤖
 
-**Enterprise-grade AI voice bot framework for Exotel WebSocket streaming.**
+**Enterprise-grade Agent Stream for Voice AI framework for Exotel WebSocket streaming.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org)
