@@ -1,0 +1,46 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Exotel Voice Bot - Git Ignore
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Dependencies
+node_modules/
+
+# Environment (keep .env.example)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/*.wav
+logs/*.json
+
+# Build output
+dist/
+build/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Runtime files
+ngrok
+*.pid
+.*.pid
+.env.backup
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Debug files
+*.heapsnapshot
+coverage/

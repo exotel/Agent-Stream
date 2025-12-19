@@ -1,0 +1,310 @@
+openapi: 3.0.3
+info:
+  title: Exotel Voice Bot API
+  description: |
+    Enterprise-grade AI voice bot framework for Exotel.
+    
+    This API provides:
+    - Health check endpoints for monitoring
+    - Connection management for active voice sessions
+    - WebSocket URL generation for Exotel integration
+    
+    ## WebSocket Protocol
+    
+    The primary communication happens over WebSocket at `/media`. 
+    See the WebSocket Events section for the message format.
+    
+  version: 1.0.0
+  contact:
+    name: API Support
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:5001
+    description: Local development
+  - url: https://your-domain.com
+    description: Production
+
+tags:
+  - name: Health
+    description: Health check and monitoring endpoints
+  - name: Connections
+    description: Active connection management
+  - name: Configuration
+    description: Dynamic configuration endpoints
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Detailed health status
+      description: |
+        Returns comprehensive health status including all dependency checks.
+        Use this for monitoring dashboards.
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service is healthy or degraded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: Service is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /health/live:
+    get:
+      tags:
+        - Health
+      summary: Liveness probe
+      description: |
+        Kubernetes liveness probe. Returns 200 if the process is alive.
+        Use this for container orchestration health checks.
+      operationId: getLiveness
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessStatus'
+
+  /health/ready:
+    get:
+      tags:
+        - Health
+      summary: Readiness probe
+      description: |
+        Kubernetes readiness probe. Returns 200 if service can handle requests.
+        Checks critical dependencies only.
+      operationId: getReadiness
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+        '503':
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+
+  /connections:
+    get:
+      tags:
+        - Connections
+      summary: List active connections
+      description: Returns information about all active WebSocket connections
+      operationId: getConnections
+      responses:
+        '200':
+          description: List of active connections
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionList'
+
+  /get-websocket-url:
+    get:
+      tags:
+        - Configuration
+      summary: Generate WebSocket URL
+      description: |
+        Generates a WebSocket URL for Exotel to connect to.
+        Can include custom parameters that will be passed to the bot.
+      operationId: getWebSocketUrl
+      parameters:
+        - name: sample-rate
+          in: query
+          description: Audio sample rate (8000, 16000, or 24000)
+          schema:
+            type: integer
+            enum: [8000, 16000, 24000]
+            default: 8000
+      responses:
+        '200':
+          description: WebSocket URL generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebSocketUrl'
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      required:
+        - status
+        - version
+        - uptime
+        - timestamp
+        - dependencies
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: Overall health status
+        version:
+          type: string
+          description: Application version
+          example: "1.0.0"
+        uptime:
+          type: integer
+          description: Uptime in seconds
+          example: 3600
+        timestamp:
+          type: string
+          format: date-time
+          description: Check timestamp
+        dependencies:
+          type: array
+          items:
+            $ref: '#/components/schemas/DependencyHealth'
+
+    DependencyHealth:
+      type: object
+      required:
+        - name
+        - status
+        - lastChecked
+      properties:
+        name:
+          type: string
+          description: Dependency name
+          example: "openai"
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        latencyMs:
+          type: integer
+          description: Check latency in milliseconds
+          example: 150
+        message:
+          type: string
+          description: Status message or error
+        lastChecked:
+          type: string
+          format: date-time
+
+    LivenessStatus:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum: [healthy]
+        timestamp:
+          type: string
+          format: date-time
+
+    ReadinessStatus:
+      type: object
+      required:
+        - status
+        - timestamp
+        - checks
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/DependencyHealth'
+
+    ConnectionList:
+      type: object
+      required:
+        - total
+        - connections
+      properties:
+        total:
+          type: integer
+          description: Total number of active connections
+          example: 3
+        connections:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectionInfo'
+
+    ConnectionInfo:
+      type: object
+      properties:
+        streamId:
+          type: string
+          description: Unique stream identifier
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        stats:
+          type: object
+          properties:
+            mediaChunkCount:
+              type: integer
+              example: 150
+            duration:
+              type: integer
+              description: Duration in milliseconds
+              example: 30000
+        senderStats:
+          type: object
+          properties:
+            mediaChunksSent:
+              type: integer
+              example: 45
+            sequenceNumber:
+              type: integer
+              example: 50
+
+    WebSocketUrl:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          description: WebSocket URL for Exotel connection
+          example: "wss://your-domain.com/media?sample-rate=8000"
+
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "INTERNAL_ERROR"
+            message:
+              type: string
+              example: "An unexpected error occurred"
+        correlationId:
+          type: string
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        timestamp:
+          type: string
+          format: date-time
+
+  securitySchemes:
+    BasicAuth:
+      type: http
+      scheme: basic
+      description: Basic authentication with API key and token
+
+security:
+  - BasicAuth: []
+

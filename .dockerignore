@@ -1,0 +1,48 @@
+# Dependencies
+node_modules
+
+# Git
+.git
+.gitignore
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/*.wav
+logs/*.log
+logs/events/*.log
+
+# Build
+dist
+coverage
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Development
+*.md
+!README.md
+.github
+tests
+__tests__
+*.test.js
+*.spec.js
+*.test.ts
+*.spec.ts
+
+# Misc
+ngrok
+*.pid
+.*.pid
+
