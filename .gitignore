@@ -17,6 +17,9 @@ env/
 *.swp
 *.swo
 
+# Node (node-bridge)
+node_modules/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -42,15 +42,18 @@ flowchart LR
 
 **WSS path:** `/sales-agent/exotel/ws/audio/{run_id}/{name}` (optional query: `?sample-rate=16000`).
 
+**Node.js option:** Same flow in Node. Run from `node-bridge/`: `npm install && npm start` (port 4041). See [node-bridge/README.md](node-bridge/README.md). Validate with a real Exotel call; no guarantee until you test.
+
 ---
 
 ## Repo layout
 
 | What | Where |
 |------|--------|
-| Exotel ↔ Bridge | `agents/gateway/sales_agent/exotel.py`, `converstation.py` |
-| Gemini config | `app/configs/gemini.py` |
-| Prompts / voice | `app/configs/prompts.py`, `gemini.py` |
+| Exotel ↔ Bridge (Python) | `agents/gateway/sales_agent/exotel.py`, `converstation.py` |
+| Exotel ↔ Bridge (Node) | `node-bridge/server.js`, `gemini-client.js`, `audio.js` |
+| Gemini config | `app/configs/gemini.py` (Python); defaults in `node-bridge/gemini-client.js` |
+| Prompts / voice | `app/configs/prompts.py`, `gemini.py` (Python) |
 | Env / secrets | `.env` (create from `.env.example`) — **do not commit `.env`** |
 
 ---
