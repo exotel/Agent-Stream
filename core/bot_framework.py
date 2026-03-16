@@ -47,7 +47,7 @@ class BotType(Enum):
     SURVEY = "survey"
     CUSTOM = "custom"
 
-class BotPersonality(Enum):
+class BotPersonality(Enum): 
     """Bot personality types"""
     PROFESSIONAL = "professional"
     FRIENDLY = "friendly"
@@ -131,7 +131,8 @@ class BotTemplateManager:
             "service_collection": self._create_service_collection_template(),
             "lead_generation": self._create_lead_generation_template(),
             "appointment_booking": self._create_appointment_booking_template(),
-            "survey": self._create_survey_template()
+            "survey": self._create_survey_template(),
+            "custom": self._create_custom_template()
         }
         
         for template_name, template in templates.items():
@@ -450,6 +451,35 @@ Be direct and efficient while remaining friendly and helpful."""
 Make the experience enjoyable and valuable for participants."""
         )
     
+    def _create_custom_template(self) -> BotConfiguration:
+        """Create a blank custom bot template - fully configurable by the user"""
+        return BotConfiguration(
+            bot_id="custom-template",
+            bot_name="AI Assistant",
+            bot_type=BotType.CUSTOM,
+            personality=BotPersonality.PROFESSIONAL,
+            temperature=0.7,
+            voice="coral",
+            capabilities=BotCapabilities(
+                can_transfer_to_human=True,
+                can_access_knowledge_base=False,
+                can_schedule_appointments=False,
+                can_send_emails=False,
+                can_access_crm=False,
+            ),
+            base_instructions=(
+                "You are a helpful voice assistant. "
+                "Keep your responses concise and conversational — this is a phone call. "
+                "Never use markdown, bullet points, or numbered lists in your responses. "
+                "Speak naturally as if you are having a real conversation."
+            ),
+            conversation_starters=[
+                "Hello! How can I help you today?",
+                "Hi there! What can I assist you with?",
+                "Hello! I'm here to help. What do you need?"
+            ]
+        )
+
     def get_template(self, template_name: str) -> Optional[BotConfiguration]:
         """Get a bot template by name"""
         template_file = self.templates_dir / f"{template_name}.json"
@@ -650,11 +680,16 @@ class BotManager:
         if port is None:
             port = 5000 + len(self.active_bots)
         
-        # Import and create the enhanced bot class
-        from openai_realtime_sales_bot import OpenAIRealtimeSalesBot
-        
         # Create bot instance with configuration
         bot_instance = DynamicBot(config)
+        
+        # Start WebSocket server
+        import websockets
+        server = await websockets.serve(
+            bot_instance.handle_websocket,
+            host,
+            port
+        )
         
         # Store active bot
         self.active_bots[bot_id] = {
@@ -662,19 +697,8 @@ class BotManager:
             "config": config,
             "host": host,
             "port": port,
-            "server_task": None
+            "server": server
         }
-        
-        # Start WebSocket server
-        import websockets
-        server_coro = websockets.serve(
-            bot_instance.handle_websocket,
-            host,
-            port
-        )
-        
-        server_task = asyncio.create_task(server_coro)
-        self.active_bots[bot_id]["server_task"] = server_task
         
         logger.info(f"🚀 Started bot {bot_id} on {host}:{port}")
         
@@ -683,14 +707,15 @@ class BotManager:
         for rate in config.sample_rates:
             logger.info(f"   • ws://{host}:{port}/?sample-rate={rate}")
         
-        return server_task
+        return server
     
     async def stop_bot(self, bot_id: str):
         """Stop a running bot"""
         if bot_id in self.active_bots:
             bot_info = self.active_bots[bot_id]
-            if bot_info["server_task"]:
-                bot_info["server_task"].cancel()
+            if bot_info.get("server"):
+                bot_info["server"].close()
+                await bot_info["server"].wait_closed()
             del self.active_bots[bot_id]
             logger.info(f"🛑 Stopped bot: {bot_id}")
     
@@ -935,4 +960,4 @@ async def cli_main():
         bot_manager.shutdown()
 
 if __name__ == "__main__":
-    asyncio.run(cli_main()) 
+    asyncio.run(cli_main())
