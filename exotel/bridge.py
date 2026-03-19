@@ -147,6 +147,9 @@ CHUNK_ALIGNMENT = 320
 MIN_CHUNK_SIZE = 3200
 MAX_CHUNK_SIZE = 102400
 DEFAULT_CHUNK_SIZE = 6400
+DEFAULT_URL_AGENT_ID_FALLBACK = os.getenv(
+    "DEFAULT_URL_AGENT_ID_FALLBACK", "agent_1301khkrw6d7f5gb68wq67r8haqr"
+)
 
 
 @dataclass
@@ -223,10 +226,14 @@ class BackgroundSoundMixer:
 
     def _load_audio(self, filepath: str) -> bytes:
         with wave.open(filepath, "rb") as wf:
-            if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() != 8000:
+            if (
+                wf.getnchannels() != 1
+                or wf.getsampwidth() != 2
+                or wf.getframerate() != 8000
+            ):
                 raise ValueError(
                     f"Background WAV must be 8kHz, 16-bit, mono. "
-                    f"Got: {wf.getframerate()}Hz, {wf.getsampwidth()*8}-bit, {wf.getnchannels()}ch. "
+                    f"Got: {wf.getframerate()}Hz, {wf.getsampwidth() * 8}-bit, {wf.getnchannels()}ch. "
                     f"Convert with: ffmpeg -i input.mp3 -ar 8000 -ac 1 -sample_fmt s16 output.wav"
                 )
             return wf.readframes(wf.getnframes())
@@ -361,7 +368,7 @@ class ElevenLabsClient:
 
     async def send_conversation_config(self, initiation_data: dict = None):
         """Send conversation initiation client data to ElevenLabs.
-        
+
         Args:
             initiation_data: Dict containing optional fields:
                 - dynamic_variables: Dict of variables accessible in agent prompt via {{var_name}}
@@ -369,14 +376,16 @@ class ElevenLabsClient:
         """
         if self.ws and self.connected:
             message = {"type": "conversation_initiation_client_data"}
-            
+
             # Merge in any provided initiation data (dynamic_variables, conversation_config_override)
             if initiation_data:
                 if "dynamic_variables" in initiation_data:
                     message["dynamic_variables"] = initiation_data["dynamic_variables"]
                 if "conversation_config_override" in initiation_data:
-                    message["conversation_config_override"] = initiation_data["conversation_config_override"]
-            
+                    message["conversation_config_override"] = initiation_data[
+                        "conversation_config_override"
+                    ]
+
             elevenlabs_logger.info(f">>> SEND conversation_initiation_client_data")
             elevenlabs_logger.debug(f">>> Config: {json.dumps(message, indent=2)}")
             await self.ws.send(json.dumps(message))
@@ -391,8 +400,9 @@ class ElevenLabsClient:
 
 
 class ConversationBridge:
-    def __init__(self, config: BridgeConfig):
+    def __init__(self, config: BridgeConfig, agent_id_override: Optional[str] = None):
         self.config = config
+        self.elevenlabs_agent_id = agent_id_override or config.elevenlabs_agent_id
         self.elevenlabs: Optional[ElevenLabsClient] = None
         self.exotel_ws = None
         self.stream_sid: Optional[str] = None
@@ -499,7 +509,7 @@ class ConversationBridge:
             self.call_logger.log_bridge("Starting ElevenLabs session...")
 
         self.elevenlabs = ElevenLabsClient(
-            agent_id=self.config.elevenlabs_agent_id,
+            agent_id=self.elevenlabs_agent_id,
             api_key=self.config.elevenlabs_api_key,
             region=self.config.elevenlabs_region,
             call_logger=self.call_logger,
@@ -542,7 +552,9 @@ class ConversationBridge:
             }
             logger.info(f"Passing dynamic variables to agent: {dynamic_vars}")
             if self.call_logger:
-                self.call_logger.log_bridge(f"Dynamic variables: {json.dumps(dynamic_vars)}")
+                self.call_logger.log_bridge(
+                    f"Dynamic variables: {json.dumps(dynamic_vars)}"
+                )
 
         await self.elevenlabs.send_conversation_config(conversation_initiation_data)
 
@@ -561,7 +573,7 @@ class ConversationBridge:
         logger.info("ElevenLabs session ended")
         if self.call_logger:
             self.call_logger.log_bridge("ElevenLabs session ended")
-        
+
         # Close Exotel WebSocket to trigger transfer flow
         # When we close, Exotel will proceed to the next applet (Connect)
         self._close_exotel_stream()
@@ -738,14 +750,16 @@ class ConversationBridge:
 
     def _close_exotel_stream(self):
         """Close the Exotel WebSocket to signal end of stream.
-        
+
         This triggers Exotel to proceed to the next applet in the flow,
         which should be the Connect applet for call transfer.
         """
         if self.exotel_ws:
             try:
                 exotel_logger.info(">>> Closing Exotel WebSocket (AI ended call)")
-                exotel_logger.info(">>> This will trigger Exotel to proceed to Connect applet")
+                exotel_logger.info(
+                    ">>> This will trigger Exotel to proceed to Connect applet"
+                )
                 self.active = False
                 # Flask-Sock uses .close() without .closed attribute
                 self.exotel_ws.close()
@@ -789,7 +803,9 @@ class ConversationBridge:
 
     def _playback_agent_audio(self):
         """Stream audio to Exotel, mixing agent speech with background sound."""
-        exotel_logger.info("Starting agent audio playback (with background sound mixing)")
+        exotel_logger.info(
+            "Starting agent audio playback (with background sound mixing)"
+        )
 
         BYTES_PER_SECOND = 16000  # 8kHz * 2 bytes per sample
         BG_CHUNK_DURATION_S = 0.02  # 20ms
@@ -923,10 +939,12 @@ init_config()
 active_bridges: dict = {}
 
 
-def _handle_exotel_stream(ws):
+def _handle_exotel_stream(ws, agent_id_override: Optional[str] = None):
     exotel_logger.info("=" * 60)
     exotel_logger.info("New WebSocket connection accepted")
     exotel_logger.info("=" * 60)
+    if agent_id_override:
+        exotel_logger.info(f"Using agent override from URL: {agent_id_override}")
 
     bridge: Optional[ConversationBridge] = None
     stream_sid: Optional[str] = None
@@ -1019,7 +1037,7 @@ def _handle_exotel_stream(ws):
                     f"    Full start data: {json.dumps(start_data, indent=2)}"
                 )
 
-                bridge = ConversationBridge(config)
+                bridge = ConversationBridge(config, agent_id_override=agent_id_override)
                 bridge.start(ws, metadata)
                 active_bridges[stream_sid] = bridge
 
@@ -1101,10 +1119,21 @@ def _handle_exotel_stream(ws):
         exotel_logger.info("=" * 60)
 
 
-# Register WebSocket route
+# Register WebSocket routes
 @sock.route("/v1/convai/conversation/exotel")
 def handle_exotel_stream(ws):
-    return _handle_exotel_stream(ws)
+    agent_id_override = (
+        request.args.get("agent_id") or request.args.get("agentId") or ""
+    ).strip() or DEFAULT_URL_AGENT_ID_FALLBACK
+    return _handle_exotel_stream(ws, agent_id_override=agent_id_override)
+
+
+@sock.route("/media")
+def handle_exotel_stream_legacy(ws):
+    agent_id_override = (
+        request.args.get("agent_id") or request.args.get("agentId") or ""
+    ).strip() or DEFAULT_URL_AGENT_ID_FALLBACK
+    return _handle_exotel_stream(ws, agent_id_override=agent_id_override)
 
 
 @app.route("/health")
@@ -1201,12 +1230,14 @@ pending_transfers: dict = {}
 # Transfer destination phone numbers (configure via environment variables)
 TRANSFER_TEAM_1_NUMBER = os.getenv("TRANSFER_TEAM_1_NUMBER", "")
 TRANSFER_TEAM_2_NUMBER = os.getenv("TRANSFER_TEAM_2_NUMBER", "")
-TRANSFER_TIMEOUT_SECONDS = int(os.getenv("TRANSFER_TIMEOUT_SECONDS", "300"))  # 5 minutes
+TRANSFER_TIMEOUT_SECONDS = int(
+    os.getenv("TRANSFER_TIMEOUT_SECONDS", "300")
+)  # 5 minutes
 
 
 def normalize_phone_number(phone: str) -> str:
     """Normalize phone number to ensure consistent format for matching.
-    
+
     Handles variations like:
     - +917021235464 -> 7021235464
     - 917021235464 -> 7021235464
@@ -1215,26 +1246,26 @@ def normalize_phone_number(phone: str) -> str:
     """
     if not phone:
         return ""
-    
+
     # Remove any whitespace and non-digit chars except leading +
     cleaned = phone.strip()
-    
+
     # Remove leading +
     if cleaned.startswith("+"):
         cleaned = cleaned[1:]
-    
+
     # Remove digits only
     cleaned = "".join(c for c in cleaned if c.isdigit())
-    
+
     # Remove India country code (91) if present at start and number is long enough
     # Indian mobile numbers are 10 digits, so with 91 prefix = 12 digits
     if len(cleaned) == 12 and cleaned.startswith("91"):
         cleaned = cleaned[2:]
-    
+
     # Remove leading zero (common in local format)
     if cleaned.startswith("0") and len(cleaned) == 11:
         cleaned = cleaned[1:]
-    
+
     return cleaned
 
 
@@ -1242,7 +1273,8 @@ def cleanup_old_transfers():
     """Remove transfer entries older than TRANSFER_TIMEOUT_SECONDS."""
     current_time = time.time()
     expired_keys = [
-        key for key, value in pending_transfers.items()
+        key
+        for key, value in pending_transfers.items()
         if current_time - value.get("timestamp", 0) > TRANSFER_TIMEOUT_SECONDS
     ]
     for key in expired_keys:
@@ -1255,7 +1287,7 @@ def handle_post_call_webhook():
     """
     Receive post-call transcription webhook from ElevenLabs.
     Extracts data collection results to determine transfer routing.
-    
+
     Expected payload structure:
     {
         "type": "post_call_transcription",
@@ -1279,55 +1311,73 @@ def handle_post_call_webhook():
     """
     try:
         payload = request.get_json()
-        
+
         if not payload:
             logger.warning("Post-call webhook received empty payload")
-            return json.dumps({"status": "error", "message": "Empty payload"}), 400, {"Content-Type": "application/json"}
-        
+            return (
+                json.dumps({"status": "error", "message": "Empty payload"}),
+                400,
+                {"Content-Type": "application/json"},
+            )
+
         event_type = payload.get("type")
         logger.info(f"Post-call webhook received: type={event_type}")
-        
+
         if event_type != "post_call_transcription":
             logger.info(f"Ignoring non-transcription event: {event_type}")
-            return json.dumps({"status": "ok", "message": "Event ignored"}), 200, {"Content-Type": "application/json"}
-        
+            return (
+                json.dumps({"status": "ok", "message": "Event ignored"}),
+                200,
+                {"Content-Type": "application/json"},
+            )
+
         data = payload.get("data", {})
         conversation_id = data.get("conversation_id", "unknown")
-        
+
         # Extract caller number from dynamic variables
         init_data = data.get("conversation_initiation_client_data", {})
         dynamic_vars = init_data.get("dynamic_variables", {})
-        caller_number = dynamic_vars.get("caller_number") or dynamic_vars.get("system__caller_id", "")
+        caller_number = dynamic_vars.get("caller_number") or dynamic_vars.get(
+            "system__caller_id", ""
+        )
         call_sid = dynamic_vars.get("call_sid", "")
-        
+
         # Extract data collection results
         analysis = data.get("analysis", {})
         data_collection = analysis.get("data_collection_results", {})
-        
+
         # Get transfer decision - single field with values: "team_1", "team_2", or "none"
         transfer_result = data_collection.get("should_transfer", {})
         transfer_value = (transfer_result.get("value") or "none").strip().lower()
-        
+
         # Normalize values - accept variations like "Team 1", "team1", "team_1", etc.
-        if transfer_value in ("team_1", "team1", "team 1", "existing", "existing_booking"):
+        if transfer_value in (
+            "team_1",
+            "team1",
+            "team 1",
+            "existing",
+            "existing_booking",
+        ):
             transfer_target = "team_1"
         elif transfer_value in ("team_2", "team2", "team 2", "new", "new_booking"):
             transfer_target = "team_2"
         else:
             transfer_target = "none"
-        
+
         logger.info(f"Post-call analysis for conversation {conversation_id}:")
         logger.info(f"  Caller: {caller_number}")
-        logger.info(f"  Transfer target: {transfer_target} (raw value: {transfer_value})")
-        
+        logger.info(
+            f"  Transfer target: {transfer_target} (raw value: {transfer_value})"
+        )
+
         # Store transfer decision if transfer is needed
         if transfer_target != "none":
             # Clean up old entries first
             cleanup_old_transfers()
-            
+
             # Normalize caller number for consistent lookup
             normalized_caller = normalize_phone_number(caller_number)
-            
+
             # Use normalized caller_number as key for lookup by Programmable Connect
             if normalized_caller:
                 pending_transfers[normalized_caller] = {
@@ -1337,52 +1387,70 @@ def handle_post_call_webhook():
                     "call_sid": call_sid,
                     "original_number": caller_number,  # Keep original for debugging
                 }
-                logger.info(f"Stored pending transfer for caller {caller_number} (normalized: {normalized_caller}) -> {transfer_target}")
+                logger.info(
+                    f"Stored pending transfer for caller {caller_number} (normalized: {normalized_caller}) -> {transfer_target}"
+                )
             else:
                 logger.warning("No caller_number found, cannot store transfer decision")
-        
+
         # Also log transcript summary if available
         transcript_summary = analysis.get("transcript_summary", "")
         if transcript_summary:
             logger.info(f"  Summary: {transcript_summary[:200]}...")
-        
+
         # Forward to ticket service (elevenlabsapibot) for ticket creation
         ticket_result = None
         try:
             import requests as http_requests
-            ticket_service_url = os.getenv("TICKET_SERVICE_URL", "http://127.0.0.1:8000/api/webhook/elevenlabs-post-call")
+
+            ticket_service_url = os.getenv(
+                "TICKET_SERVICE_URL",
+                "http://127.0.0.1:8000/api/webhook/elevenlabs-post-call",
+            )
             logger.info(f"Forwarding to ticket service: {ticket_service_url}")
-            
+
             # Forward original headers including ElevenLabs signature
             forward_headers = {"Content-Type": "application/json"}
-            elevenlabs_sig = request.headers.get("elevenlabs-signature") or request.headers.get("ElevenLabs-Signature")
+            elevenlabs_sig = request.headers.get(
+                "elevenlabs-signature"
+            ) or request.headers.get("ElevenLabs-Signature")
             if elevenlabs_sig:
                 forward_headers["elevenlabs-signature"] = elevenlabs_sig
                 logger.info(f"Forwarding ElevenLabs signature header")
-            
+
             # Forward the original payload with signature
             ticket_response = http_requests.post(
                 ticket_service_url,
                 data=request.get_data(),  # Use raw data to preserve signature
                 headers=forward_headers,
-                timeout=10
+                timeout=10,
             )
             ticket_result = ticket_response.json()
             logger.info(f"Ticket service response: {ticket_result}")
         except Exception as ticket_error:
             logger.warning(f"Failed to forward to ticket service: {ticket_error}")
             ticket_result = {"error": str(ticket_error)}
-        
-        return json.dumps({
-            "status": "ok",
-            "conversation_id": conversation_id,
-            "transfer_target": transfer_target,
-            "ticket_result": ticket_result,
-        }), 200, {"Content-Type": "application/json"}
-        
+
+        return (
+            json.dumps(
+                {
+                    "status": "ok",
+                    "conversation_id": conversation_id,
+                    "transfer_target": transfer_target,
+                    "ticket_result": ticket_result,
+                }
+            ),
+            200,
+            {"Content-Type": "application/json"},
+        )
+
     except Exception as e:
         logger.error(f"Error processing post-call webhook: {e}", exc_info=True)
-        return json.dumps({"status": "error", "message": str(e)}), 500, {"Content-Type": "application/json"}
+        return (
+            json.dumps({"status": "error", "message": str(e)}),
+            500,
+            {"Content-Type": "application/json"},
+        )
 
 
 @app.route("/exotel/connect", methods=["GET"])
@@ -1390,14 +1458,14 @@ def handle_programmable_connect():
     """
     Exotel Programmable Connect endpoint.
     Returns transfer destination based on post-call analysis.
-    
+
     Exotel sends GET request with query params:
     - CallSid: Unique call identifier
     - CallFrom: Caller's number
     - CallTo: Called number (ExoPhone)
     - Direction: 'incoming' or 'outbound-dial'
     - etc.
-    
+
     Returns JSON response for Programmable Connect:
     {
         "destination": {"numbers": ["+919812345678"]},
@@ -1411,27 +1479,27 @@ def handle_programmable_connect():
         call_from = request.args.get("CallFrom", "")
         call_to = request.args.get("CallTo", "")
         direction = request.args.get("Direction", "")
-        
+
         logger.info(f"Programmable Connect request:")
         logger.info(f"  CallSid: {call_sid}")
         logger.info(f"  CallFrom: {call_from}")
         logger.info(f"  CallTo: {call_to}")
         logger.info(f"  Direction: {direction}")
-        
+
         # Clean up old entries
         cleanup_old_transfers()
-        
+
         # Normalize caller number for consistent lookup
         normalized_from = normalize_phone_number(call_from)
         logger.info(f"  Normalized CallFrom: {normalized_from}")
-        
+
         # Look up pending transfer by normalized caller number
         # Wait up to 10 seconds for post-call webhook to arrive (race condition fix)
         transfer_info = None
         max_wait_seconds = 10
         poll_interval = 0.5
         waited = 0
-        
+
         while waited < max_wait_seconds:
             transfer_info = pending_transfers.get(normalized_from)
             if transfer_info:
@@ -1441,86 +1509,107 @@ def handle_programmable_connect():
             waited += poll_interval
             if waited < max_wait_seconds:
                 logger.info(f"  Waiting for transfer... ({waited:.1f}s)")
-        
+
         if not transfer_info:
             # No pending transfer found after waiting
-            logger.info(f"No pending transfer found for {call_from} (normalized: {normalized_from}) after {max_wait_seconds}s")
-            return json.dumps({
-                "destination": {"numbers": []},
-                "error": "No pending transfer for this caller"
-            }), 200, {"Content-Type": "application/json"}
-        
+            logger.info(
+                f"No pending transfer found for {call_from} (normalized: {normalized_from}) after {max_wait_seconds}s"
+            )
+            return (
+                json.dumps(
+                    {
+                        "destination": {"numbers": []},
+                        "error": "No pending transfer for this caller",
+                    }
+                ),
+                200,
+                {"Content-Type": "application/json"},
+            )
+
         # Determine transfer destination based on transfer_target
         destination_number = None
         transfer_target = transfer_info.get("transfer_target", "none")
-        
+
         if transfer_target == "team_1" and TRANSFER_TEAM_1_NUMBER:
             destination_number = TRANSFER_TEAM_1_NUMBER
-            logger.info(f"Routing {call_from} to Team 1 (existing booking): {destination_number}")
+            logger.info(
+                f"Routing {call_from} to Team 1 (existing booking): {destination_number}"
+            )
         elif transfer_target == "team_2" and TRANSFER_TEAM_2_NUMBER:
             destination_number = TRANSFER_TEAM_2_NUMBER
-            logger.info(f"Routing {call_from} to Team 2 (new booking): {destination_number}")
+            logger.info(
+                f"Routing {call_from} to Team 2 (new booking): {destination_number}"
+            )
         else:
             logger.warning(f"Transfer requested but no destination configured")
             logger.warning(f"  Transfer target: {transfer_target}")
             logger.warning(f"  Team 1 Number: {TRANSFER_TEAM_1_NUMBER}")
             logger.warning(f"  Team 2 Number: {TRANSFER_TEAM_2_NUMBER}")
-        
+
         # Remove the pending transfer entry (one-time use)
         del pending_transfers[normalized_from]
-        
+
         if not destination_number:
-            return json.dumps({
-                "destination": {"numbers": []},
-                "error": "No destination number configured for requested team"
-            }), 200, {"Content-Type": "application/json"}
-        
+            return (
+                json.dumps(
+                    {
+                        "destination": {"numbers": []},
+                        "error": "No destination number configured for requested team",
+                    }
+                ),
+                200,
+                {"Content-Type": "application/json"},
+            )
+
         # Return Programmable Connect response
         response = {
             "fetch_after_attempt": False,
-            "destination": {
-                "numbers": [destination_number]
-            },
+            "destination": {"numbers": [destination_number]},
             "record": True,
             "recording_channels": "dual",
             "max_ringing_duration": 45,
             "max_conversation_duration": 3600,
-            "music_on_hold": {
-                "type": "operator_tone"
-            }
+            "music_on_hold": {"type": "operator_tone"},
         }
-        
+
         logger.info(f"Programmable Connect response: {json.dumps(response)}")
         return json.dumps(response), 200, {"Content-Type": "application/json"}
-        
+
     except Exception as e:
         logger.error(f"Error in Programmable Connect: {e}", exc_info=True)
-        return json.dumps({
-            "destination": {"numbers": []},
-            "error": str(e)
-        }), 500, {"Content-Type": "application/json"}
+        return (
+            json.dumps({"destination": {"numbers": []}, "error": str(e)}),
+            500,
+            {"Content-Type": "application/json"},
+        )
 
 
 @app.route("/transfers", methods=["GET"])
 def list_pending_transfers():
     """Debug endpoint to list pending transfers."""
     cleanup_old_transfers()
-    return json.dumps({
-        "pending_transfers": {
-            k: {
-                "team_1": v.get("team_1"),
-                "team_2": v.get("team_2"),
-                "conversation_id": v.get("conversation_id"),
-                "age_seconds": int(time.time() - v.get("timestamp", 0))
+    return (
+        json.dumps(
+            {
+                "pending_transfers": {
+                    k: {
+                        "team_1": v.get("team_1"),
+                        "team_2": v.get("team_2"),
+                        "conversation_id": v.get("conversation_id"),
+                        "age_seconds": int(time.time() - v.get("timestamp", 0)),
+                    }
+                    for k, v in pending_transfers.items()
+                },
+                "config": {
+                    "team_1_number": TRANSFER_TEAM_1_NUMBER or "(not configured)",
+                    "team_2_number": TRANSFER_TEAM_2_NUMBER or "(not configured)",
+                    "timeout_seconds": TRANSFER_TIMEOUT_SECONDS,
+                },
             }
-            for k, v in pending_transfers.items()
-        },
-        "config": {
-            "team_1_number": TRANSFER_TEAM_1_NUMBER or "(not configured)",
-            "team_2_number": TRANSFER_TEAM_2_NUMBER or "(not configured)",
-            "timeout_seconds": TRANSFER_TIMEOUT_SECONDS
-        }
-    }), 200, {"Content-Type": "application/json"}
+        ),
+        200,
+        {"Content-Type": "application/json"},
+    )
 
 
 def signal_handler(sig, frame):

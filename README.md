@@ -84,10 +84,19 @@ graph LR
 
 ### 1. Install Dependencies
 
+**macOS / Linux:**
 ```bash
 cd exotel
 python3 -m venv ../venv
 source ../venv/bin/activate
+pip install -r requirements.txt
+```
+
+**Windows (PowerShell):**
+```powershell
+cd exotel
+python -m venv ..\venv
+..\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
@@ -103,8 +112,7 @@ ffmpeg -i your-ambience.mp3 -af "volume=15,alimiter=limit=0.9" -ar 8000 -ac 1 -s
 
 ### 3. Configure
 
-Set environment variables (or use CLI flags):
-
+**macOS / Linux:**
 ```bash
 export ELEVENLABS_AGENT_ID="your_agent_id"
 export ELEVENLABS_API_KEY="your_api_key"           # optional but recommended
@@ -113,16 +121,30 @@ export BG_SOUND_FILE="exotel/assets/office-ambience-loud.wav"
 export BG_SOUND_VOLUME="0.5"                        # 0.0 to 1.0
 ```
 
+**Windows (PowerShell):**
+```powershell
+$env:ELEVENLABS_AGENT_ID = "your_agent_id"
+$env:ELEVENLABS_API_KEY = "your_api_key"
+$env:ELEVENLABS_REGION = "default"
+$env:BG_SOUND_FILE = "exotel\assets\office-ambience-loud.wav"
+$env:BG_SOUND_VOLUME = "0.5"
+```
+
 ### 4. Run
 
 ```bash
-# Development
+# Development (macOS/Linux: python3, Windows: python)
 python3 exotel/bridge.py --port 10002
 
-# Production (macOS requires OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES)
+# Production - Linux
+gunicorn --bind 0.0.0.0:10002 --worker-class gevent --workers 1 --timeout 0 "exotel.bridge:app"
+
+# Production - macOS (requires fork safety override)
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES \
   gunicorn --bind 0.0.0.0:10002 --worker-class gevent --workers 1 --timeout 0 "exotel.bridge:app"
 ```
+
+> **Windows:** gunicorn does not support Windows. Use the development command (`python3 exotel/bridge.py`) or run via Docker.
 
 ### 5. Expose with ngrok (for local development)
 
@@ -131,7 +153,7 @@ ngrok http 10002 --domain your-domain.ngrok-free.dev
 ```
 
 Configure Exotel Stream applet WebSocket URL to:
-`wss://your-domain.ngrok-free.dev/v1/convai/conversation/exotel`
+`ws://your-domain.ngrok-free.dev/v1/convai/conversation/exotel`
 
 ## API Endpoints
 
@@ -176,6 +198,116 @@ To let the agent control background sound via voice commands, add a **Webhook** 
 
 ## Deployment
 
+### AWS (ECS Fargate + ALB)
+
+The deploy script creates an ECS Fargate service behind an Application Load Balancer
+in `ap-south-1` (Mumbai). ALB natively supports WebSocket upgrades.
+
+**Prerequisites:** AWS CLI configured with SSO or access keys.
+
+```bash
+# Configure AWS SSO (one-time)
+aws sso login --profile eleven-playground
+
+export ELEVENLABS_AGENT_ID="your_agent_id"
+export ELEVENLABS_API_KEY="your_api_key"
+export ELEVENLABS_REGION="india"        # default | us | eu | india
+export AWS_PROFILE="eleven-playground"  # or your AWS profile name
+
+./deploy_aws.sh
+```
+
+The script outputs the ALB DNS name. Your Exotel applet WebSocket URL will be:
+```
+ws://<ALB_DNS>/v1/convai/conversation/exotel?agent_id=<your_agent_id>
+```
+
+#### Enabling wss:// (HTTPS/TLS)
+
+For production, Exotel requires `wss://`. This needs an SSL certificate on the ALB.
+
+**Option A: ACM certificate with a custom domain**
+
+If you own a domain (e.g. `bridge.yourcompany.com`):
+
+```bash
+AWS_PROFILE=eleven-playground
+REGION=ap-south-1
+
+# 1. Request a certificate (you'll need to validate via DNS or email)
+CERT_ARN=$(aws acm request-certificate --region $REGION --profile $AWS_PROFILE \
+    --domain-name bridge.yourcompany.com \
+    --validation-method DNS \
+    --query CertificateArn --output text)
+echo "Certificate ARN: $CERT_ARN"
+echo "Complete DNS validation in the ACM console before proceeding."
+
+# 2. After validation, get the ALB ARN
+ALB_ARN=$(aws elbv2 describe-load-balancers --region $REGION --profile $AWS_PROFILE \
+    --names exotel-bridge-alb --query "LoadBalancers[0].LoadBalancerArn" --output text)
+
+# 3. Get the target group ARN
+TG_ARN=$(aws elbv2 describe-target-groups --region $REGION --profile $AWS_PROFILE \
+    --names exotel-bridge-tg --query "TargetGroups[0].TargetGroupArn" --output text)
+
+# 4. Add HTTPS listener
+aws elbv2 create-listener --region $REGION --profile $AWS_PROFILE \
+    --load-balancer-arn "$ALB_ARN" \
+    --protocol HTTPS --port 443 \
+    --certificates CertificateArn="$CERT_ARN" \
+    --default-actions Type=forward,TargetGroupArn="$TG_ARN"
+
+# 5. Point your DNS (CNAME) to the ALB DNS name
+ALB_DNS=$(aws elbv2 describe-load-balancers --region $REGION --profile $AWS_PROFILE \
+    --names exotel-bridge-alb --query "LoadBalancers[0].DNSName" --output text)
+echo "Add a CNAME record: bridge.yourcompany.com -> $ALB_DNS"
+```
+
+Your Exotel WebSocket URL becomes:
+```
+wss://bridge.yourcompany.com/v1/convai/conversation/exotel?agent_id=<your_agent_id>
+```
+
+**Option B: Quick TLS with the ALB's default domain (self-signed)**
+
+If you don't have a custom domain, you can use a self-signed certificate for testing.
+Note: Exotel may reject self-signed certs in production.
+
+```bash
+# Generate a self-signed cert
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /tmp/bridge-key.pem -out /tmp/bridge-cert.pem \
+    -subj "/CN=exotel-bridge"
+
+# Import into ACM
+CERT_ARN=$(aws acm import-certificate --region $REGION --profile $AWS_PROFILE \
+    --certificate fileb:///tmp/bridge-cert.pem \
+    --private-key fileb:///tmp/bridge-key.pem \
+    --query CertificateArn --output text)
+
+# Then follow steps 2-4 from Option A above
+```
+
+**Useful commands:**
+```bash
+# View logs
+aws logs tail /ecs/exotel-bridge --region ap-south-1 --follow --profile eleven-playground
+
+# Check service status
+aws ecs describe-services --cluster exotel-bridge-cluster --services exotel-bridge \
+  --region ap-south-1 --profile eleven-playground \
+  --query 'services[0].{status:status,running:runningCount,desired:desiredCount}'
+
+# Force redeploy after code changes (rebuild image first)
+docker buildx build --platform linux/amd64 -t exotel-bridge-repo .
+docker tag exotel-bridge-repo:latest <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com/exotel-bridge-repo:latest
+aws ecr get-login-password --region ap-south-1 --profile eleven-playground | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com
+docker push <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com/exotel-bridge-repo:latest
+aws ecs update-service --cluster exotel-bridge-cluster --service exotel-bridge --force-new-deployment --region ap-south-1 --profile eleven-playground
+```
+
+> **Note:** Build with `--platform linux/amd64` on Apple Silicon Macs. Fargate requires x86_64 images.
+
 ### GCP Cloud Run
 
 ```bash
@@ -184,24 +316,30 @@ export ELEVENLABS_API_KEY="your_api_key"
 ./deploy_gcp.sh
 ```
 
-### AWS App Runner
-
-```bash
-export ELEVENLABS_AGENT_ID="your_agent_id"
-export ELEVENLABS_API_KEY="your_api_key"
-./deploy_aws.sh
-```
-
-### Docker
+### Docker (local)
 
 ```bash
 docker build -t exotel-elevenlabs-bridge .
 docker run -p 10002:10002 \
   -e ELEVENLABS_AGENT_ID=your_agent_id \
+  -e ELEVENLABS_API_KEY=your_api_key \
+  -e ELEVENLABS_REGION=india \
   -e BG_SOUND_FILE=exotel/assets/office-ambience-loud.wav \
   -e BG_SOUND_VOLUME=0.5 \
   exotel-elevenlabs-bridge
 ```
+
+### ngrok (local development)
+
+```bash
+# Run the bridge locally
+python3 exotel/bridge.py --agent-id your_agent_id --port 10002
+
+# Expose via ngrok
+ngrok http 10002 --domain your-domain.ngrok-free.dev
+```
+
+Exotel applet WebSocket URL: `ws://your-domain.ngrok-free.dev/v1/convai/conversation/exotel?agent_id=<your_agent_id>`
 
 ## Environment Variables
 

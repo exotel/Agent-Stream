@@ -2,6 +2,6 @@ flask
 flask-sock
 websockets
 python-dotenv
-gunicorn
+gunicorn<23
 gevent
 gevent-websocket
