@@ -198,150 +198,170 @@ To let the agent control background sound via voice commands, add a **Webhook** 
 
 ## Deployment
 
-### AWS (ECS Fargate + ALB + DuckDNS)
-
-The deploy script creates an ECS Fargate service behind an Application Load Balancer
-in `ap-south-1` (Mumbai). Exotel requires `wss://` with a valid TLS certificate, so
-the setup uses a free [DuckDNS](https://www.duckdns.org) domain with a
-[Let's Encrypt](https://letsencrypt.org) certificate on the ALB.
+Exotel requires `wss://` with a **valid CA-signed TLS certificate**. Self-signed
+certs and plain `ws://` do not work — Exotel will reject the connection or tear
+down the stream immediately.
 
 > **Do not use AWS App Runner.** App Runner's envoy proxy returns HTTP 403 on
 > WebSocket upgrade requests — this is a
 > [known unsupported feature](https://github.com/aws/apprunner-roadmap/issues/13).
-> Self-signed certificates also do not work — Exotel rejects them.
+
+### Option A: EC2 + Docker + Nginx + Let's Encrypt (recommended)
+
+The simplest production setup. Runs the bridge in Docker on an EC2 instance with
+nginx handling TLS termination and WebSocket proxying.
 
 **Prerequisites:**
-- AWS CLI configured with SSO or access keys
-- Docker (with `buildx` for cross-platform builds)
-- A free [DuckDNS](https://www.duckdns.org) account (sign in with Google/GitHub)
+- An EC2 instance (Amazon Linux 2023, `t3.micro` or larger)
+- A domain name pointing to the EC2's public IP (A record)
+- Security group with ports 22, 80, 443 open
 
-#### Step 1: Deploy ECS + ALB
+#### Step 1: Install Docker and run the bridge
 
 ```bash
-# Configure AWS SSO (one-time)
-aws sso login --profile eleven-playground
+# SSH into your EC2 instance
+ssh -i your-key.pem ec2-user@<EC2_PUBLIC_IP>
 
+# Install Docker
+sudo yum install -y docker
+sudo systemctl start docker && sudo systemctl enable docker
+
+# Run the bridge
+sudo docker run -d --name exotel-bridge --restart always \
+    -p 10002:10002 \
+    -e ELEVENLABS_AGENT_ID=your_agent_id \
+    -e ELEVENLABS_API_KEY=your_api_key \
+    -e ELEVENLABS_REGION=default \
+    ghcr.io/jitendra2603/exotel-elevenlabs-bridge:latest
+
+# Verify it's running
+curl http://localhost:10002/health
+```
+
+> **`ELEVENLABS_REGION`** must match where your agent was created:
+> `default` (US), `us`, `eu`, or `india`.
+> Using the wrong region causes "The AI agent you are trying to reach does not exist."
+
+#### Step 2: Set up TLS with nginx + Let's Encrypt
+
+```bash
+# Install nginx and certbot
+sudo yum install -y nginx python3-certbot-nginx
+
+# Start nginx
+sudo systemctl start nginx && sudo systemctl enable nginx
+
+# Get a certificate (replace with your domain)
+sudo certbot --nginx -d yourdomain.com --non-interactive --agree-tos \
+    --email you@example.com --redirect
+```
+
+This automatically:
+- Obtains a free Let's Encrypt certificate
+- Configures nginx as a TLS reverse proxy with WebSocket support
+- Sets up auto-renewal via a systemd timer
+
+If certbot's auto-config doesn't set up the WebSocket proxy, create the config manually:
+
+```bash
+cat > /etc/nginx/conf.d/exotel-bridge.conf << 'EOF'
+server {
+    listen 443 ssl;
+    server_name yourdomain.com;
+
+    ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:10002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}
+EOF
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+#### Step 3: Configure Exotel
+
+Set your Exotel Stream applet WebSocket URL to:
+```
+wss://yourdomain.com/v1/convai/conversation/exotel?agent_id=your_agent_id
+```
+
+#### Updating the bridge
+
+```bash
+sudo docker pull ghcr.io/jitendra2603/exotel-elevenlabs-bridge:latest
+sudo docker stop exotel-bridge && sudo docker rm exotel-bridge
+sudo docker run -d --name exotel-bridge --restart always \
+    -p 10002:10002 \
+    -e ELEVENLABS_AGENT_ID=your_agent_id \
+    -e ELEVENLABS_API_KEY=your_api_key \
+    -e ELEVENLABS_REGION=default \
+    ghcr.io/jitendra2603/exotel-elevenlabs-bridge:latest
+```
+
+#### Viewing logs
+
+```bash
+sudo docker logs exotel-bridge --tail 50 --follow
+```
+
+### Option B: EC2 + Docker + DuckDNS (no custom domain)
+
+If you don't own a domain, use a free [DuckDNS](https://www.duckdns.org) subdomain:
+
+1. Sign up at https://www.duckdns.org (Google/GitHub login)
+2. Create a subdomain (e.g. `mybridge`) and point it to your EC2 IP:
+   ```bash
+   curl "https://www.duckdns.org/update?domains=mybridge&token=YOUR_TOKEN&ip=<EC2_PUBLIC_IP>"
+   ```
+3. Follow Steps 1-3 from Option A, using `mybridge.duckdns.org` as the domain
+
+> DuckDNS subdomains work with Let's Encrypt / certbot for free TLS certificates.
+
+### Option C: ECS Fargate + ALB + DuckDNS/ACM
+
+For a fully managed container deployment without managing an EC2 instance.
+Uses ECS Fargate behind an ALB with TLS via DuckDNS + Let's Encrypt or ACM.
+
+```bash
 export ELEVENLABS_AGENT_ID="your_agent_id"
 export ELEVENLABS_API_KEY="your_api_key"
-export ELEVENLABS_REGION="india"        # default | us | eu | india
-export AWS_PROFILE="eleven-playground"  # or your AWS profile name
+export ELEVENLABS_REGION="default"
+export AWS_PROFILE="your-aws-profile"
 
 ./deploy_aws.sh
 ```
 
-> Build with `--platform linux/amd64` on Apple Silicon Macs. Fargate requires x86_64 images.
-> The deploy script handles this automatically.
+Then set up TLS (DuckDNS + `acme.sh`, or ACM with a custom domain).
+See `deploy_aws.sh` for full details. ALB requires a valid certificate on its
+HTTPS listener — the deploy script creates the ALB with HTTP only; you add TLS
+after.
 
-#### Step 2: Set up DuckDNS + TLS
+If you own a domain, use a free **ACM certificate** (auto-renews):
+```bash
+aws acm request-certificate --domain-name bridge.yourcompany.com --validation-method DNS
+# Complete DNS validation, add HTTPS listener, point CNAME to ALB DNS name.
+```
+
+### Option D: ngrok (local development)
 
 ```bash
-AWS_PROFILE=eleven-playground
-REGION=ap-south-1
-DUCKDNS_DOMAIN="mybridge"              # your chosen subdomain
-DUCKDNS_TOKEN="your_duckdns_token"     # from https://www.duckdns.org
+# Run the bridge locally
+python3 exotel/bridge.py --agent-id your_agent_id --port 10002
 
-# 1. Create a subdomain at https://www.duckdns.org (e.g. "mybridge")
-
-# 2. Point it to the ALB IP
-ALB_IP=$(dig +short $(aws elbv2 describe-load-balancers --region $REGION --profile $AWS_PROFILE \
-    --names exotel-bridge-alb --query "LoadBalancers[0].DNSName" --output text) | head -1)
-curl "https://www.duckdns.org/update?domains=${DUCKDNS_DOMAIN}&token=${DUCKDNS_TOKEN}&ip=${ALB_IP}"
-
-# 3. Get a Let's Encrypt certificate
-curl https://get.acme.sh | sh
-export DuckDNS_Token="$DUCKDNS_TOKEN"
-~/.acme.sh/acme.sh --issue --dns dns_duckdns -d ${DUCKDNS_DOMAIN}.duckdns.org \
-    --server letsencrypt --dnssleep 30
-
-# 4. Import certificate into ACM
-CERT_DIR="$HOME/.acme.sh/${DUCKDNS_DOMAIN}.duckdns.org_ecc"
-CERT_ARN=$(aws acm import-certificate --region $REGION --profile $AWS_PROFILE \
-    --certificate fileb://${CERT_DIR}/${DUCKDNS_DOMAIN}.duckdns.org.cer \
-    --private-key fileb://${CERT_DIR}/${DUCKDNS_DOMAIN}.duckdns.org.key \
-    --certificate-chain fileb://${CERT_DIR}/ca.cer \
-    --query CertificateArn --output text)
-
-# 5. Add HTTPS listener to ALB
-ALB_ARN=$(aws elbv2 describe-load-balancers --region $REGION --profile $AWS_PROFILE \
-    --names exotel-bridge-alb --query "LoadBalancers[0].LoadBalancerArn" --output text)
-TG_ARN=$(aws elbv2 describe-target-groups --region $REGION --profile $AWS_PROFILE \
-    --names exotel-bridge-tg --query "TargetGroups[0].TargetGroupArn" --output text)
-aws elbv2 create-listener --region $REGION --profile $AWS_PROFILE \
-    --load-balancer-arn "$ALB_ARN" --protocol HTTPS --port 443 \
-    --certificates CertificateArn="$CERT_ARN" \
-    --default-actions Type=forward,TargetGroupArn="$TG_ARN"
+# Expose via ngrok (provides valid TLS automatically)
+ngrok http 10002 --domain your-domain.ngrok-free.dev
 ```
 
-Your Exotel applet WebSocket URL:
-```
-wss://mybridge.duckdns.org/v1/convai/conversation/exotel?agent_id=<your_agent_id>
-```
-
-#### Step 3: Update agent ID or env vars
-
-To change the ElevenLabs agent ID or API key after deployment, update the ECS
-task definition and redeploy:
-
-```bash
-# Edit the environment variables in the task definition JSON, then:
-aws ecs register-task-definition --region $REGION --profile $AWS_PROFILE \
-    --cli-input-json file://task-definition.json
-aws ecs update-service --region $REGION --profile $AWS_PROFILE \
-    --cluster exotel-bridge-cluster --service exotel-bridge \
-    --task-definition exotel-bridge:<NEW_REVISION> --force-new-deployment
-```
-
-#### Certificate renewal
-
-The Let's Encrypt certificate expires every 90 days. Renew and re-import:
-
-```bash
-export DuckDNS_Token="$DUCKDNS_TOKEN"
-~/.acme.sh/acme.sh --renew -d ${DUCKDNS_DOMAIN}.duckdns.org
-aws acm import-certificate --region $REGION --profile $AWS_PROFILE \
-    --certificate-arn "$CERT_ARN" \
-    --certificate fileb://${CERT_DIR}/${DUCKDNS_DOMAIN}.duckdns.org.cer \
-    --private-key fileb://${CERT_DIR}/${DUCKDNS_DOMAIN}.duckdns.org.key \
-    --certificate-chain fileb://${CERT_DIR}/ca.cer
-```
-
-#### Using a custom domain instead of DuckDNS
-
-If you own a domain (e.g. `bridge.yourcompany.com`), use a free ACM certificate
-instead — it auto-renews and supports CNAME (no single-IP limitation):
-
-```bash
-CERT_ARN=$(aws acm request-certificate --region $REGION --profile $AWS_PROFILE \
-    --domain-name bridge.yourcompany.com --validation-method DNS \
-    --query CertificateArn --output text)
-# Complete DNS validation in the ACM console, then add the HTTPS listener (step 5 above).
-# Point your DNS CNAME to the ALB DNS name.
-```
-
-#### Useful commands
-
-```bash
-# View logs
-aws logs tail /ecs/exotel-bridge --region ap-south-1 --follow --profile eleven-playground
-
-# Check service status
-aws ecs describe-services --cluster exotel-bridge-cluster --services exotel-bridge \
-  --region ap-south-1 --profile eleven-playground \
-  --query 'services[0].{status:status,running:runningCount,desired:desiredCount}'
-
-# Redeploy after code changes
-docker buildx build --platform linux/amd64 -t exotel-bridge-repo .
-docker tag exotel-bridge-repo:latest <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com/exotel-bridge-repo:latest
-aws ecr get-login-password --region ap-south-1 --profile eleven-playground | \
-  docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com
-docker push <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com/exotel-bridge-repo:latest
-aws ecs update-service --cluster exotel-bridge-cluster --service exotel-bridge \
-  --force-new-deployment --region ap-south-1 --profile eleven-playground
-
-# Update DuckDNS IP (if ALB IPs change)
-ALB_IP=$(dig +short <ALB_DNS> | head -1)
-curl "https://www.duckdns.org/update?domains=${DUCKDNS_DOMAIN}&token=${DUCKDNS_TOKEN}&ip=${ALB_IP}"
-```
+Exotel applet WebSocket URL: `wss://your-domain.ngrok-free.dev/v1/convai/conversation/exotel?agent_id=<your_agent_id>`
 
 ### GCP Cloud Run
 
@@ -350,33 +370,6 @@ export ELEVENLABS_AGENT_ID="your_agent_id"
 export ELEVENLABS_API_KEY="your_api_key"
 ./deploy_gcp.sh
 ```
-
-### Docker (local)
-
-```bash
-docker build -t exotel-elevenlabs-bridge .
-docker run -p 10002:10002 \
-  -e ELEVENLABS_AGENT_ID=your_agent_id \
-  -e ELEVENLABS_API_KEY=your_api_key \
-  -e ELEVENLABS_REGION=india \
-  -e BG_SOUND_FILE=exotel/assets/office-ambience-loud.wav \
-  -e BG_SOUND_VOLUME=0.5 \
-  exotel-elevenlabs-bridge
-```
-
-### ngrok (local development)
-
-```bash
-# Run the bridge locally
-python3 exotel/bridge.py --agent-id your_agent_id --port 10002
-
-# Expose via ngrok
-ngrok http 10002 --domain your-domain.ngrok-free.dev
-```
-
-Exotel applet WebSocket URL: `wss://your-domain.ngrok-free.dev/v1/convai/conversation/exotel?agent_id=<your_agent_id>`
-
-> ngrok provides valid TLS certificates automatically — use `wss://` (not `ws://`).
 
 ## Environment Variables
 
