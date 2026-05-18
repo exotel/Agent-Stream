@@ -143,7 +143,7 @@ Keep responses brief (1-2 sentences). Be friendly and professional.`
 
 ## 🎙️ ElevenLabs Conversational AI
 
-> **Agent-Stream vs production Python bridge** — This repo’s ElevenLabs bot is one of seven implementations in a learning/evaluation framework. For production telephony features (India region routing, background ambience, call transfer, ECS deploy runbooks), see **[Two Ways to Bridge Exotel and ElevenLabs](docs/guides/ELEVENLABS_BRIDGE_COMPARISON.md)** and the community **[exotel-elevenlabs-bridge](https://github.com/Jitendra2603/exotel-elevenlabs-bridge)**.
+> **Agent-Stream vs production Python bridge** — Node.js bots here are for learning and provider comparison. For production telephony (India region, background ambience, call transfer), use **[`bridges/elevenlabs-production/`](bridges/elevenlabs-production/)** (by [Jitendra](https://github.com/Jitendra2603)) — see **[comparison guide](docs/guides/ELEVENLABS_BRIDGE_COMPARISON.md)** and **[CONTRIBUTORS.md](CONTRIBUTORS.md)**.
 
 ### What is it?
 
@@ -612,6 +612,7 @@ npm run test:coverage
 ## 📚 Resources
 
 ### Documentation
+- **[Production Python bridge](bridges/elevenlabs-production/)** - ElevenLabs telephony bridge (contrib. Jitendra) + [attribution](bridges/elevenlabs-production/ATTRIBUTION.md)
 - **[ElevenLabs Bridge Comparison](docs/guides/ELEVENLABS_BRIDGE_COMPARISON.md)** - Agent-Stream vs production Python bridge (when to use which)
 - **[Architecture Guide](docs/ARCHITECTURE.md)** - Comprehensive system architecture & data flows
 - **[Developer Quickstart](docs/DEVELOPER_QUICKSTART.md)** - Get running in 5 minutes

@@ -8,7 +8,9 @@
 
 We open-sourced Agent-Stream as a framework for building voice bots on Exotel. The ElevenLabs integration is one of **seven bot implementations** in this repo — OpenAI Realtime, Gemini Speech-to-Speech, Gemini Live, pipeline bots, and others. The goal: let developers evaluate AI providers side by side without writing WebSocket plumbing from scratch.
 
-A few months later, a contributor shipped something different: **[exotel-elevenlabs-bridge](https://github.com/Jitendra2603/exotel-elevenlabs-bridge)**. Same problem — bridge Exotel's phone network to ElevenLabs Conversational AI — but a different philosophy. Single-purpose. Python. Production-first. With features Agent-Stream does not have and does not try to have.
+A few months later, a contributor shipped something different: the **production Python bridge** (upstream: [Jitendra2603/exotel-elevenlabs-bridge](https://github.com/Jitendra2603/exotel-elevenlabs-bridge), vendored in this repo at [`bridges/elevenlabs-production/`](../../bridges/elevenlabs-production/)). Same problem — bridge Exotel's phone network to ElevenLabs Conversational AI — but a different philosophy. Single-purpose. Python. Production-first. With features the Node.js framework does not have and does not try to have.
+
+**Contributor:** [Jitendra](https://github.com/Jitendra2603) — see [ATTRIBUTION.md](../../bridges/elevenlabs-production/ATTRIBUTION.md).
 
 Both repos solve the same core problem. The diff between them is, I think, the most honest description of what **"production"** actually means for voice AI on telephony.
 
@@ -162,19 +164,28 @@ Use this repo to understand events, barge-in (`clear`), custom query params, and
 
 ### Phase 2 — Production ElevenLabs (Python bridge)
 
-Use the upstream repo (community forks exist; prefer the source unless you maintain patches):
-
-**https://github.com/Jitendra2603/exotel-elevenlabs-bridge**
+**In this repo** (recommended for Exotel customers):
 
 ```bash
+cd bridges/elevenlabs-production
+python3 -m venv ../../.venv-elevenlabs-bridge
+source ../../.venv-elevenlabs-bridge/bin/activate
+pip install -r exotel/requirements.txt
+
 export ELEVENLABS_AGENT_ID="..."
 export ELEVENLABS_API_KEY="..."
 export ELEVENLABS_REGION="india"          # if calls are from India
 export BG_SOUND_FILE="exotel/assets/office-ambience-loud.wav"
 export BG_SOUND_VOLUME="0.3"
+
+python3 exotel/bridge.py --port 10002
 ```
 
-Deploy with their ECS or Cloud Run scripts. Configure Exotel:
+See [`bridges/elevenlabs-production/README.md`](../../bridges/elevenlabs-production/README.md) and [`ATTRIBUTION.md`](../../bridges/elevenlabs-production/ATTRIBUTION.md).
+
+**Upstream** (for contributing back): https://github.com/Jitendra2603/exotel-elevenlabs-bridge
+
+Deploy with `deploy_aws.sh` or `deploy_gcp.sh` in that directory. Configure Exotel:
 
 `wss://your-domain/v1/convai/conversation/exotel?agent_id=<agent_id>`
 
