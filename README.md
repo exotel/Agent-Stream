@@ -143,6 +143,8 @@ Keep responses brief (1-2 sentences). Be friendly and professional.`
 
 ## 🎙️ ElevenLabs Conversational AI
 
+> **Agent-Stream vs production Python bridge** — This repo’s ElevenLabs bot is one of seven implementations in a learning/evaluation framework. For production telephony features (India region routing, background ambience, call transfer, ECS deploy runbooks), see **[Two Ways to Bridge Exotel and ElevenLabs](docs/guides/ELEVENLABS_BRIDGE_COMPARISON.md)** and the community **[exotel-elevenlabs-bridge](https://github.com/Jitendra2603/exotel-elevenlabs-bridge)**.
+
 ### What is it?
 
 ElevenLabs Conversational AI is an **all-in-one voice agent platform** that handles STT, LLM, and TTS in a single optimized pipeline. Instead of chaining three separate services, everything happens on ElevenLabs' infrastructure.
@@ -610,6 +612,7 @@ npm run test:coverage
 ## 📚 Resources
 
 ### Documentation
+- **[ElevenLabs Bridge Comparison](docs/guides/ELEVENLABS_BRIDGE_COMPARISON.md)** - Agent-Stream vs production Python bridge (when to use which)
 - **[Architecture Guide](docs/ARCHITECTURE.md)** - Comprehensive system architecture & data flows
 - **[Developer Quickstart](docs/DEVELOPER_QUICKSTART.md)** - Get running in 5 minutes
 - **[Use Case Configuration](docs/guides/USE_CASE_CONFIGURATION.md)** - Configure bots for your business
