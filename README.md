@@ -12,6 +12,14 @@ A production-ready, conversational AI voice bot that bridges **Exotel's WebSocke
 * **🔒 Security First**: Environment-based configuration, no hardcoded secrets
 * **🎵 High-Quality Audio**: 24kHz PCM16 audio format for superior voice quality
 
+## 🇮🇳 Sarvam AI + Agent Stream (Indian languages)
+
+Production integration guide for **Hindi, English, and 10+ Indian languages** on PSTN and browser calls:
+
+**[docs/SARVAM_AGENTSTREAM_INTEGRATION.md](docs/SARVAM_AGENTSTREAM_INTEGRATION.md)**
+
+Includes architecture, Sarvam STT/TTS API patterns, barge-in, rate-limit fallback, deployment checklist, and reference code in [`examples/sarvam_agentstream_pipeline.py`](examples/sarvam_agentstream_pipeline.py).
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -19,6 +27,7 @@ A production-ready, conversational AI voice bot that bridges **Exotel's WebSocke
 - Python 3.8+
 - OpenAI API key with Realtime API access
 - Exotel account with Voicebot Applet access
+- *(Optional)* [Sarvam AI](https://www.sarvam.ai) API key for Indian-language STT/TTS — see integration guide above
 
 ### Installation
 
