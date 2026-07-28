@@ -12,6 +12,14 @@ A production-ready, conversational AI voice bot that bridges **Exotel's WebSocke
 * **🔒 Security First**: Environment-based configuration, no hardcoded secrets
 * **🎵 High-Quality Audio**: 24kHz PCM16 audio format for superior voice quality
 
+## Dograh native integration (team review)
+
+Outbound Connect Voice AI provider package for [dograh-hq/dograh](https://github.com/dograh-hq/dograh):
+
+**[docs/DOGRAH_AGENTSTREAM_INTEGRATION.md](docs/DOGRAH_AGENTSTREAM_INTEGRATION.md)**
+
+Source under [`dograh-contribution/`](dograh-contribution/). Smoke-test script: [`scripts/place_connect_call.py`](scripts/place_connect_call.py).
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -19,6 +27,7 @@ A production-ready, conversational AI voice bot that bridges **Exotel's WebSocke
 - Python 3.8+
 - OpenAI API key with Realtime API access
 - Exotel account with Voicebot Applet access
+- *(Optional)* Exotel Account SID / API Key / Token for Connect Voice AI smoke tests — see Dograh guide above
 
 ### Installation
 
