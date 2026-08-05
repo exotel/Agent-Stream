@@ -12,6 +12,16 @@ Sample and production-oriented bridges that connect **Exotel AgentStream** (bidi
 | **Sarvam** | [`integrations/sarvam`](integrations/sarvam/) | Python | Indian languages (STT/TTS) |
 | **Pipecat** | [`integrations/pipecat`](integrations/pipecat/) | Python | Pluggable STT → LLM → TTS ([ExotelFrameSerializer](https://docs.pipecat.ai/api-reference/server/services/serializers/exotel)) |
 | **Dograh** | [`integrations/dograh`](integrations/dograh/) | Python | Drop Exotel telephony into [Dograh](https://github.com/dograh-hq/dograh) (platform wiring, not an AI vendor) |
+| **Agent recipes** | [`integrations/agents`](integrations/agents/) | Python | Mix-and-match S2S + STT/LLM/TTS stacks on AgentStream |
+
+### Agent recipe matrix (Exotel AgentStream)
+
+Full picker: [`integrations/agents/README.md`](integrations/agents/README.md)
+
+| Type | Examples |
+|------|----------|
+| Speech-to-speech | GPT Realtime, Gemini Live, Gemini Live + Pipecat, Grok Voice |
+| Pipelines | Deepgram / AssemblyAI / Sarvam / Speechmatics × GPT or Gemini × Cartesia / ElevenLabs / Grok TTS / OpenAI TTS |
 
 ## Quick start (OpenAI — still works from repo root)
 
@@ -44,6 +54,7 @@ Details: [`docs/CONNECT_VOICE_AI.md`](docs/CONNECT_VOICE_AI.md) · WSS protocol:
 shared/                 # place_connect_call.py + Exotel env example
 docs/                   # Connect API + WSS protocol
 integrations/<provider>/  # self-contained bridge + README + deps
+integrations/agents/      # Voice AI stack recipes (S2S + STT/LLM/TTS)
 ```
 
 ## Prerequisites
