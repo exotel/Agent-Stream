@@ -1,248 +1,57 @@
-# 🤖 Voice AI Bot System
+# Agent-Stream — Exotel Voice AI integrations
 
-A production-ready, conversational AI voice bot that bridges **Exotel's WebSocket streaming** with **OpenAI's Realtime API** for natural, speech-to-speech conversations over phone calls.
+Sample and production-oriented bridges that connect **Exotel AgentStream** (bidirectional WebSocket audio) to Voice AI providers. Place outbound calls with the [Connect Voice AI API](https://docs.exotel.com/exotel-agentstream/connect-voice-ai-api).
 
-## 🎯 What This Bot Does
+## Choose a provider
 
-* **🗣️ Natural Conversations**: Real-time speech-to-speech using OpenAI's latest Realtime API
-* **📞 Telephony Integration**: Seamless integration with Exotel's voice streaming services
-* **🛑 Smart Interruption**: Handles conversation interruptions naturally
-* **🔊 Audio Enhancement**: Built-in noise suppression and audio optimization for telephony
-* **⚡ Real-time Processing**: 200ms audio buffering for smooth conversation flow
-* **🔒 Security First**: Environment-based configuration, no hardcoded secrets
-* **🎵 High-Quality Audio**: 24kHz PCM16 audio format for superior voice quality
+| Provider | Path | Language | Best for |
+|----------|------|----------|----------|
+| **OpenAI Realtime** | [`integrations/openai-realtime`](integrations/openai-realtime/) | Python | Speech-to-speech realtime |
+| **ElevenLabs** | [`integrations/elevenlabs`](integrations/elevenlabs/) | Python | Conversational AI + ambience |
+| **Gemini Live** | [`integrations/gemini-live`](integrations/gemini-live/) | Node.js | Google Gemini Live |
+| **Sarvam** | [`integrations/sarvam`](integrations/sarvam/) | Python | Indian languages (STT/TTS) |
+| **Pipecat** | [`integrations/pipecat`](integrations/pipecat/) | Python | Pluggable STT → LLM → TTS ([ExotelFrameSerializer](https://docs.pipecat.ai/api-reference/server/services/serializers/exotel)) |
+| **Dograh** | [`integrations/dograh`](integrations/dograh/) | Python | Drop Exotel telephony into [Dograh](https://github.com/dograh-hq/dograh) (platform wiring, not an AI vendor) |
 
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Python 3.8+
-- OpenAI API key with Realtime API access
-- Exotel account with Voicebot Applet access
-
-### Installation
-
-1. **Clone the repository:**
-   ```bash
-   git clone <repository-url>
-   cd Agent-Stream
-   ```
-
-2. **Create a virtual environment:**
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Configure environment variables:**
-   ```bash
-   cp env.example .env
-   # Edit .env with your OpenAI API key and other settings
-   ```
-
-### Configuration
-
-Edit your `.env` file with the following required settings:
+## Quick start (OpenAI — still works from repo root)
 
 ```bash
-# REQUIRED - Get from OpenAI dashboard
-OPENAI_API_KEY=your-openai-api-key-here
-
-# SERVER CONFIG
-SERVER_HOST=0.0.0.0
-SERVER_PORT=5000
-
-# BOT PERSONALITY
-COMPANY_NAME=Your Company Name
-SALES_BOT_NAME=Sarah
-
-# AUDIO SETTINGS
-SAMPLE_RATE=24000
-AUDIO_CHUNK_SIZE=200
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp env.example .env   # set OPENAI_API_KEY
+python main.py        # shim → integrations/openai-realtime
 ```
 
-### Running the Bot
+Canonical OpenAI package: `integrations/openai-realtime/`.
+
+## Test with Connect Voice AI
+
+1. Start a bridge and expose it (`ngrok http <port>` → `wss://…`).
+2. Configure Exotel credentials (`shared/env.exotel.example`).
+3. Place a call:
 
 ```bash
-# Start the bot
-python main.py
-
-# Test the configuration
-python main.py --config-check
-
-# Run system tests
-python main.py --test
+python shared/place_connect_call.py \
+  --to +91XXXXXXXXXX \
+  --stream-url "wss://YOUR_HOST/?sample-rate=8000"
 ```
 
-The bot will start a WebSocket server on `0.0.0.0:5000`.
+Details: [`docs/CONNECT_VOICE_AI.md`](docs/CONNECT_VOICE_AI.md) · WSS protocol: [`docs/AGENTSTREAM_WSS_PROTOCOL.md`](docs/AGENTSTREAM_WSS_PROTOCOL.md)
 
-## 📡 Exotel Integration
+## Layout
 
-### WebSocket URLs
-
-- **Local:** `ws://localhost:5000`
-- **Public:** Use ngrok or your server's public IP
-
-### Exotel Voicebot Applet Configuration
-
-1. **URL:** `wss://your-domain.com/?sample-rate=24000`
-2. **Sample Rate:** 24kHz (recommended for high quality)
-3. **Audio Format:** Raw/slin (16-bit PCM)
-4. **Bidirectional Streaming:** Enabled
-
-### Test Message Format
-
-```json
-{
-  "event": "connected"
-}
+```text
+shared/                 # place_connect_call.py + Exotel env example
+docs/                   # Connect API + WSS protocol
+integrations/<provider>/  # self-contained bridge + README + deps
 ```
 
-## 🏗️ Project Structure
+## Prerequisites
 
-```
-.
-├── .env                 # Environment variables (local)
-├── .gitignore           # Git ignore file
-├── LICENSE              # Project license
-├── README.md            # This README file
-├── config.py            # Centralized configuration
-├── core/                # Core bot logic and framework
-│   ├── __init__.py
-│   ├── bot_framework.py
-│   └── openai_realtime_sales_bot.py
-├── engines/             # AI engine components (STT, TTS, NLP, etc.)
-│   ├── __init__.py
-│   ├── audio_enhancer.py
-│   ├── media_resampler.py
-│   ├── nlp_engine.py
-│   ├── stt_engine.py
-│   └── tts_engine.py
-├── env.example          # Example environment variables
-├── main.py              # Main entry point for the application
-├── requirements.txt     # Python dependencies
-└── venv/                # Python virtual environment
-```
+- Python 3.8+ (and Node 18+ for Gemini Live)
+- Exotel account with Voicebot / Connect Voice AI enabled
+- Provider API keys for the integration you run
 
-## 🔧 Configuration Options
+## License
 
-### Audio Settings
-
-- **SAMPLE_RATE:** Audio sample rate (8000, 16000, 24000)
-- **AUDIO_CHUNK_SIZE:** Chunk size in milliseconds (default: 200)
-- **BUFFER_SIZE_MS:** Audio buffer size (default: 160)
-
-### Bot Personality
-
-- **COMPANY_NAME:** Your company name
-- **SALES_BOT_NAME:** Bot's name
-- **OPENAI_VOICE:** Voice selection (coral, nova, shimmer)
-
-### Server Settings
-
-- **SERVER_HOST:** Server host (default: 0.0.0.0)
-- **SERVER_PORT:** Server port (default: 5000)
-
-## 🚀 Deployment
-
-### Option 1: Development (ngrok)
-
-```bash
-# Install ngrok
-./ngrok http 5000
-# Use: wss://xxxxx.ngrok-free.app
-```
-
-### Option 2: Cloud VPS
-
-```bash
-# Setup on DigitalOcean/AWS/GCP
-sudo ufw allow 5000
-python main.py
-# Use: wss://your-server-ip:5000
-```
-
-### Option 3: Docker
-
-```bash
-# Build and run
-docker build -t voice-bot .
-docker run --env-file .env -p 5000:5000 voice-bot
-```
-
-## 🧪 Testing
-
-### Basic Tests
-
-```bash
-# Test configuration
-python main.py --config-check
-
-# Test bot connection
-python main.py --test
-```
-
-### Manual Testing
-
-```bash
-# Using wscat
-wscat -c ws://localhost:5000
-
-# Send test message
-{"event": "connected"}
-```
-
-## 🔒 Security
-
-- All sensitive information is stored in environment variables
-- No hardcoded API keys or tokens
-- `.env` file is gitignored
-- Use HTTPS/WSS in production
-
-## 📊 Monitoring
-
-### Key Metrics
-
-- Call Duration
-- Bot Response Time
-- Audio Quality Score
-- Conversation Completion Rate
-- Error Rate
-
-### Log Analysis
-
-```bash
-# Monitor key events
-grep "NEW EXOTEL CONNECTION" logs/bot.log
-grep "CONVERSATION COMPLETED" logs/bot.log
-grep "ERROR" logs/bot.log
-```
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-- Check the troubleshooting section in the README
-- Review GitHub Issues for similar problems
-- Post detailed issues with logs and configuration
-
-## 🙏 Acknowledgments
-
-- [Exotel](https://www.exotel.com) for voice streaming services
-- [OpenAI](https://openai.com) for Realtime API
-- [Agent-Stream](https://github.com/exotel/Agent-Stream) for inspiration
+MIT — see [LICENSE](LICENSE).

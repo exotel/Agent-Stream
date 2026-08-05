@@ -1,0 +1,15 @@
+# Voice AI Bot Dependencies
+
+# Core dependencies
+websockets==11.0.3
+python-dotenv
+openai
+asyncio
+
+# Audio processing
+pydub
+numpy
+
+# Optional: for better audio quality
+# librosa
+# soundfile

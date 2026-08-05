@@ -103,12 +103,18 @@ celerybeat.pid
 
 # Environments
 .env
+.env.exotel
 .venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Per-integration venvs / node modules
+integrations/**/venv/
+integrations/**/node_modules/
+integrations/**/logs/
 
 # Spyder project settings
 .spyderproject
