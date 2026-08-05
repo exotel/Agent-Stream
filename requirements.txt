@@ -1,15 +1,3 @@
-# Voice AI Bot Dependencies
-
-# Core dependencies
-websockets==11.0.3
-python-dotenv
-openai
-asyncio
-
-# Audio processing
-pydub
-numpy
-
-# Optional: for better audio quality
-# librosa
-# soundfile
+# Default (OpenAI Realtime) — canonical path:
+#   integrations/openai-realtime/requirements.txt
+-r integrations/openai-realtime/requirements.txt

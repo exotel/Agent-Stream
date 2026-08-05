@@ -1,0 +1,6 @@
+# Pipecat + Exotel AgentStream
+pipecat-ai[websocket,silero,openai,deepgram,cartesia]>=0.0.92
+python-dotenv>=1.0.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+loguru>=0.7.0
