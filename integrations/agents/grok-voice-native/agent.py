@@ -50,18 +50,25 @@ class GrokVoiceSession(AgentSession):
         )
 
         try:
-            self._ws = await websockets.connect(
-                _xai_realtime_url(),
-                additional_headers={"Authorization": f"Bearer {key}"},
-                max_size=8 * 1024 * 1024,
+            try:
+                self._ws = await websockets.connect(
+                    _xai_realtime_url(),
+                    additional_headers={"Authorization": f"Bearer {key}"},
+                    max_size=8 * 1024 * 1024,
+                )
+            except TypeError:
+                # websockets>=13 renamed additional_headers → extra_headers on some builds
+                self._ws = await websockets.connect(
+                    _xai_realtime_url(),
+                    extra_headers={"Authorization": f"Bearer {key}"},
+                    max_size=8 * 1024 * 1024,
+                )
+        except Exception as exc:
+            logger.error(
+                f"Grok Voice WS connect failed: {exc}. "
+                "Confirm XAI_API_KEY and that the xAI team has Voice credits/licenses."
             )
-        except TypeError:
-            # websockets>=13 renamed additional_headers → extra_headers on some builds
-            self._ws = await websockets.connect(
-                _xai_realtime_url(),
-                extra_headers={"Authorization": f"Bearer {key}"},
-                max_size=8 * 1024 * 1024,
-            )
+            return
 
         await self._ws.send(
             json.dumps(
