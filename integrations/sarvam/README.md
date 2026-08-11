@@ -7,6 +7,7 @@ Indian-language STT/TTS (**Saaras** / **Bulbul**) over Exotel AgentStream WSS.
 | [`server.py`](server.py) | Runnable echo bot (Connect Voice AI) |
 | [`sarvam_agentstream_pipeline.py`](sarvam_agentstream_pipeline.py) | STT/TTS helpers |
 | [`SARVAM_AGENTSTREAM_INTEGRATION.md`](SARVAM_AGENTSTREAM_INTEGRATION.md) | Full production guide |
+| [`.env.example`](.env.example) | Copy to `.env` (gitignored) — never commit API keys |
 
 ## Prerequisites
 

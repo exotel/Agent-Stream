@@ -41,11 +41,35 @@ class Config:
     SILENCE_THRESHOLD = float(os.getenv('SILENCE_THRESHOLD', '0.01'))
     NOISE_THRESHOLD = float(os.getenv('NOISE_THRESHOLD', '0.01'))
     AUDIO_ENHANCEMENT_ENABLED = os.getenv('AUDIO_ENHANCEMENT_ENABLED', 'false').lower() == 'true'
+    # Debug only: 200ms tone on Exotel connected (causes an audible beep before greeting).
+    SEND_TEST_TONE = os.getenv('SEND_TEST_TONE', 'false').lower() == 'true'
     
     # ===== EXOTEL SPECIFIC =====
     EXOTEL_MARK_CLEAR_ENHANCED = os.getenv('EXOTEL_MARK_CLEAR_ENHANCED', 'true').lower() == 'true'
-    EXOTEL_VARIABLE_CHUNK_SUPPORT = os.getenv('EXOTEL_VARIABLE_CHUNK_SUPPORT', 'true').lower() == 'true'
-    DYNAMIC_CHUNK_SIZING = os.getenv('DYNAMIC_CHUNK_SIZING', 'true').lower() == 'true'
+    # Fixed inbound chunks are clearer for Realtime than dumping variable-size bursts.
+    EXOTEL_VARIABLE_CHUNK_SUPPORT = os.getenv('EXOTEL_VARIABLE_CHUNK_SUPPORT', 'false').lower() == 'true'
+    DYNAMIC_CHUNK_SIZING = os.getenv('DYNAMIC_CHUNK_SIZING', 'false').lower() == 'true'
+    # Match nodejs-voice-bot-framework OpenAI bot: 200ms = 3200 B @ 8 kHz (Exotel min chunk).
+    EXOTEL_OUTBOUND_FRAME_MS = int(os.getenv('EXOTEL_OUTBOUND_FRAME_MS', '200'))
+    # Resample OpenAI PCM24 in blocks matching outbound frame duration (continuity).
+    OPENAI_RESAMPLE_BLOCK_MS = int(os.getenv('OPENAI_RESAMPLE_BLOCK_MS', '200'))
+    # Fixed size when sending Exotel mic PCM up to OpenAI (after upsample).
+    INBOUND_CHUNK_MS = int(os.getenv('INBOUND_CHUNK_MS', '20'))
+    # Node OpenAI bot skips mic→OpenAI while bot speaks (cuts echo / muddy S2S).
+    HALF_DUPLEX = os.getenv('HALF_DUPLEX', 'true').lower() == 'true'
+    # 0 = send as soon as a frame is ready (Node sendMedia); 0.9 ≈ realtime pacing.
+    OUTBOUND_PACE_FACTOR = float(os.getenv('OUTBOUND_PACE_FACTOR', '0'))
+    # Pre-cache TTS greeting and play on start before Realtime connects (~0ms feel).
+    INSTANT_GREETING = os.getenv('INSTANT_GREETING', 'true').lower() == 'true'
+    GREETING_TEXT = os.getenv(
+        'GREETING_TEXT',
+        f"Hi! This is {os.getenv('SALES_BOT_NAME', 'Sarah')} from "
+        f"{os.getenv('COMPANY_NAME', 'TechSolutions Inc.')}. How can I help you today?",
+    )
+    # Faster turn-taking (mirrors nodejs openai-realtime-bot.js VAD).
+    VAD_THRESHOLD = float(os.getenv('VAD_THRESHOLD', '0.6'))
+    VAD_PREFIX_PADDING_MS = int(os.getenv('VAD_PREFIX_PADDING_MS', '200'))
+    VAD_SILENCE_DURATION_MS = int(os.getenv('VAD_SILENCE_DURATION_MS', '400'))
     
     # ===== BOT PERSONALITY =====
     SALES_BOT_NAME = os.getenv('SALES_BOT_NAME', 'Sarah')
@@ -160,24 +184,26 @@ class Config:
         """Calculate chunk size in bytes"""
         return int(sample_rate * chunk_size_ms / 1000) * 2  # 2 bytes per sample (16-bit)
     
+    # OpenAI GA Realtime PCM wire rate (input requires explicit rate; output is 24 kHz).
+    OPENAI_PCM_RATE = 24000
+
     @classmethod
     def get_wire_audio_format(cls, sample_rate: int) -> str:
-        """Internal wire format used for PCM↔μ-law conversion helpers."""
-        # Telephony 8 kHz uses G.711 μ-law (GA: audio/pcmu). Higher rates use PCM16.
-        return 'g711_ulaw' if sample_rate <= 8000 else 'pcm16'
+        """Internal wire format used for OpenAI ↔ Exotel conversion helpers.
+
+        Always PCM16 on the OpenAI wire. Requesting audio/pcmu while GA still
+        emitted linear PCM caused 24 kHz bytes to be decoded as 8 kHz μ-law →
+        very low / slow pitch on the phone.
+        """
+        return 'pcm16'
 
     @classmethod
     def get_enhanced_session_config(cls, sample_rate: int, voice: str) -> Dict[str, Any]:
         """GA Realtime session.update payload (no OpenAI-Beta header)."""
-        use_ulaw = sample_rate <= 8000
-        if use_ulaw:
-            input_format = {"type": "audio/pcmu"}
-            output_format = {"type": "audio/pcmu"}
-        else:
-            # GA PCM requires an explicit rate on input; output PCM is 24 kHz.
-            rate = 24000 if sample_rate >= 24000 else 16000
-            input_format = {"type": "audio/pcm", "rate": rate}
-            output_format = {"type": "audio/pcm"}
+        # Always negotiate PCM @ 24 kHz with OpenAI; resample to Exotel rate locally.
+        # GA requires rate on both input and output for audio/pcm.
+        input_format = {"type": "audio/pcm", "rate": cls.OPENAI_PCM_RATE}
+        output_format = {"type": "audio/pcm", "rate": cls.OPENAI_PCM_RATE}
 
         return {
             "type": "realtime",
@@ -185,14 +211,18 @@ class Config:
             "output_modalities": ["audio"],
             "instructions": (
                 f"You are {cls.SALES_BOT_NAME}, a professional sales representative "
-                f"for {cls.COMPANY_NAME}. Be warm, concise, and helpful on phone calls."
+                f"for {cls.COMPANY_NAME}. Be warm, concise, and helpful on phone calls. "
+                "Never repeat or parrot the caller's words back to them."
             ),
             "audio": {
                 "input": {
                     "format": input_format,
                     "turn_detection": {
                         "type": "server_vad",
-                        "threshold": 0.5,
+                        # Faster turn-taking — matches nodejs-voice-bot-framework OpenAI bot.
+                        "threshold": cls.VAD_THRESHOLD,
+                        "prefix_padding_ms": cls.VAD_PREFIX_PADDING_MS,
+                        "silence_duration_ms": cls.VAD_SILENCE_DURATION_MS,
                         "create_response": True,
                     },
                 },

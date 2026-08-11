@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """
-OpenAI Realtime Sales Bot - Enhanced Production Version with Multi-Sample Rate Support
-Bridges Exotel WebSocket with OpenAI Realtime API for natural conversations
-New Features: 16kHz/24kHz support, variable chunk sizes, enhanced mark/clear events
+OpenAI Realtime ↔ Exotel AgentStream bridge (sample).
 
-Security Notice: This code uses environment variables for sensitive configuration.
-Set OPENAI_API_KEY environment variable before running.
+Live entry via ``main.py`` / ``core.bot``. Not a multi-tenant production worker.
 """
 
 import asyncio
@@ -43,8 +40,21 @@ class OpenAIRealtimeSalesBot:
         
         # Enhanced audio buffering with dynamic sample rate support
         self.audio_buffers: Dict[str, bytes] = {}
+        # OpenAI → Exotel paced playback (accumulate then emit telephony frames)
+        self.outbound_buffers: Dict[str, bytearray] = {}  # PCM16 @ Exotel rate
+        self.outbound_pcm24: Dict[str, bytearray] = {}  # PCM16 @ OpenAI wire rate
+        self.outbound_ratecv_state: Dict[str, Any] = {}  # audioop.ratecv state
+        self.inbound_ratecv_state: Dict[str, Any] = {}
+        self.outbound_seq: Dict[str, int] = {}
+        self.outbound_drain_tasks: Dict[str, asyncio.Task] = {}
+        self.outbound_flush: Dict[str, bool] = {}
+        self.bot_speaking: Dict[str, bool] = {}
+        self.instant_greeting_sent: Dict[str, bool] = {}
+        self._openai_connecting: set = set()
         self.connection_sample_rates: Dict[str, int] = {}  # Track sample rate per connection
         self.connection_chunk_sizes: Dict[str, int] = {}   # Track chunk size per connection
+        # Pre-cached Exotel-rate PCM greeting (nodejs INSTANT_GREETING pattern)
+        self.cached_greeting_pcm: Optional[bytes] = None
         
         # Default audio configuration (will be updated per connection)
         self.default_sample_rate = Config.DEFAULT_SAMPLE_RATE
@@ -60,13 +70,21 @@ class OpenAIRealtimeSalesBot:
         self.exotel_enhanced_events = Config.EXOTEL_MARK_CLEAR_ENHANCED
         self.variable_chunk_support = Config.EXOTEL_VARIABLE_CHUNK_SUPPORT
         self.dynamic_chunk_sizing = Config.DYNAMIC_CHUNK_SIZING
+        self.half_duplex = Config.HALF_DUPLEX
         
-        logger.info("🤖 Enhanced OpenAI Realtime Sales Bot initialized!")
-        logger.info(f"🎵 Multi-sample rate support: {Config.SUPPORTED_SAMPLE_RATES} Hz")
-        logger.info(f"📦 Variable chunk sizes: {self.min_chunk_size_ms}ms - {Config.MAX_CHUNK_SIZE_MS}ms")
-        logger.info(f"✨ Enhanced Exotel events: {self.exotel_enhanced_events}")
-        logger.info(f"🏢 Company: {Config.COMPANY_NAME}")
-        logger.info(f"👤 Sales Rep: {Config.SALES_REP_NAME}")
+        logger.info("🤖 OpenAI Realtime ↔ Exotel bridge initialized (speech-to-speech)")
+        logger.info(f"🎵 Exotel rates: {Config.SUPPORTED_SAMPLE_RATES} Hz | OpenAI wire: {Config.OPENAI_PCM_RATE} Hz PCM")
+        logger.info(
+            f"📤 Outbound frame: {Config.EXOTEL_OUTBOUND_FRAME_MS}ms | "
+            f"resample block: {Config.OPENAI_RESAMPLE_BLOCK_MS}ms | "
+            f"pace={Config.OUTBOUND_PACE_FACTOR} | half_duplex={self.half_duplex}"
+        )
+        logger.info(
+            f"⚡ Instant greeting: {Config.INSTANT_GREETING} | "
+            f"VAD thr={Config.VAD_THRESHOLD} silence={Config.VAD_SILENCE_DURATION_MS}ms"
+        )
+        logger.info(f"🔊 Test tone on connect: {Config.SEND_TEST_TONE}")
+        logger.info(f"🏢 Company: {Config.COMPANY_NAME} | Bot: {Config.SALES_BOT_NAME}")
 
     async def handle_exotel_websocket(self, websocket, path=None):
         """Handle incoming WebSocket connection from Exotel with enhanced sample rate detection"""
@@ -96,9 +114,13 @@ class OpenAIRealtimeSalesBot:
             # Set up connection keep-alive and error handling
             async for message in websocket:
                 try:
-                    logger.info(f"📨 EXOTEL MESSAGE: {message}")
                     data = json.loads(message)
                     event = data.get("event", "")
+                    # Never log full media payloads at INFO — floods the loop and delays TTS.
+                    if event == "media":
+                        logger.debug("📨 EXOTEL media frame")
+                    else:
+                        logger.info(f"📨 EXOTEL MESSAGE: {message[:500]}")
                     
                     # Extract stream ID
                     if "streamSid" in data:
@@ -110,8 +132,11 @@ class OpenAIRealtimeSalesBot:
                     if stream_id not in self.connection_sample_rates:
                         self._initialize_connection_settings(stream_id, detected_sample_rate, data)
                     
-                    logger.info(f"🆔 STREAM ID: {stream_id}")
-                    logger.info(f"🎯 EVENT: '{event}' for {stream_id}")
+                    if event == "media":
+                        logger.debug(f"🆔 STREAM ID: {stream_id} EVENT=media")
+                    else:
+                        logger.info(f"🆔 STREAM ID: {stream_id}")
+                        logger.info(f"🎯 EVENT: '{event}' for {stream_id}")
                     
                     # Store enhanced Exotel connection
                     if stream_id not in self.exotel_connections:
@@ -158,119 +183,132 @@ class OpenAIRealtimeSalesBot:
     def _initialize_connection_settings(self, stream_id: str, sample_rate: int, start_data: dict):
         """Initialize enhanced connection settings based on detected parameters"""
         self.connection_sample_rates[stream_id] = sample_rate
-        
-        # Calculate optimal chunk size based on sample rate and network conditions
+        self.bot_speaking[stream_id] = False
+        self.outbound_seq[stream_id] = 0
+
+        # Fixed inbound chunks → OpenAI (20ms default). Dynamic only if explicitly enabled.
         if self.dynamic_chunk_sizing:
             chunk_size_ms = Config.get_adaptive_chunk_size(sample_rate)
         else:
-            chunk_size_ms = self.buffer_size_ms
-        
+            chunk_size_ms = max(20, int(getattr(Config, "INBOUND_CHUNK_MS", 20)))
+
         chunk_size_bytes = Config.get_chunk_size_bytes(sample_rate, chunk_size_ms)
+        # Align to even bytes (16-bit samples)
+        chunk_size_bytes = max(2, chunk_size_bytes - (chunk_size_bytes % 2))
         self.connection_chunk_sizes[stream_id] = chunk_size_bytes
-        
+
         logger.info(f"🔧 INITIALIZED CONNECTION {stream_id}:")
-        logger.info(f"   📡 Sample Rate: {sample_rate}Hz")
-        logger.info(f"   📦 Chunk Size: {chunk_size_ms}ms ({chunk_size_bytes} bytes)")
+        logger.info(f"   📡 Sample Rate: {sample_rate}Hz (Exotel) ↔ {Config.OPENAI_PCM_RATE}Hz (OpenAI)")
+        logger.info(f"   📥 Inbound chunk: {chunk_size_ms}ms ({chunk_size_bytes} bytes)")
+        logger.info(f"   📤 Outbound frame: {Config.EXOTEL_OUTBOUND_FRAME_MS}ms")
         logger.info(f"   ⚙️ Enhanced Events: {self.exotel_enhanced_events}")
 
     async def handle_exotel_connected(self, stream_id: str, data: dict):
         """Handle Exotel connected event with enhanced confirmation"""
         logger.info(f"✅ EXOTEL CONNECTED (ENHANCED): {stream_id}")
         
-        # Send immediate acknowledgment to Exotel
-        try:
-            exotel_ws = self.exotel_connections[stream_id]["websocket"]
-            sample_rate = self.connection_sample_rates.get(stream_id, self.default_sample_rate)
-            
-            # Generate sample rate appropriate test tone
-            test_tone = self.generate_test_tone(sample_rate=sample_rate)
-            test_audio_b64 = base64.b64encode(test_tone).decode()
-            
-            test_message = {
-                "event": "media",
-                "streamSid": stream_id,
-                "media": {
-                    "payload": test_audio_b64,
-                    "timestamp": str(int(time.time() * 1000)),
-                    "sequenceNumber": "1"
+        # Optional debug tone (SEND_TEST_TONE=true). Off by default — causes a beep before greeting.
+        if Config.SEND_TEST_TONE:
+            try:
+                exotel_ws = self.exotel_connections[stream_id]["websocket"]
+                sample_rate = self.connection_sample_rates.get(stream_id, self.default_sample_rate)
+                
+                test_tone = self.generate_test_tone(sample_rate=sample_rate)
+                test_audio_b64 = base64.b64encode(test_tone).decode()
+                
+                test_message = {
+                    "event": "media",
+                    "streamSid": stream_id,
+                    "media": {
+                        "payload": test_audio_b64,
+                        "timestamp": "0",
+                        "sequenceNumber": "1",
+                    },
                 }
-            }
-            
-            await exotel_ws.send(json.dumps(test_message))
-            logger.info(f"🔊 ENHANCED TEST TONE SENT ({sample_rate}Hz) to confirm audio pipeline for {stream_id}")
-            
-        except Exception as e:
-            logger.error(f"❌ Error sending enhanced test tone: {e}")
+                
+                await exotel_ws.send(json.dumps(test_message))
+                logger.info(f"🔊 ENHANCED TEST TONE SENT ({sample_rate}Hz) to confirm audio pipeline for {stream_id}")
+                
+            except Exception as e:
+                logger.error(f"❌ Error sending enhanced test tone: {e}")
         
-        # Defer OpenAI until we have a real stream_sid (comes on start)
-        if stream_id and stream_id != "unknown":
-            await self.connect_to_openai_enhanced(stream_id)
-        else:
-            logger.info("⏳ Waiting for Exotel start event before connecting OpenAI")
+        # Defer OpenAI connect to start (instant greeting + parallel connect there).
+        logger.info("⏳ Waiting for Exotel start event before connecting OpenAI")
+
 
     async def handle_exotel_start(self, stream_id: str, data: dict):
-        """Handle enhanced Exotel start event with sample rate detection"""
+        """Handle Exotel start: instant cached greeting + OpenAI connect in parallel (nodejs pattern)."""
         sample_rate = self.connection_sample_rates.get(stream_id, self.default_sample_rate)
         logger.info(f"🚀 ENHANCED SALES CALL STARTED: {stream_id} @ {sample_rate}Hz")
-        
-        # Log media format if available
+
         if "mediaFormat" in data:
             media_format = data["mediaFormat"]
             logger.info(f"📺 Media Format: {json.dumps(media_format, indent=2)}")
 
-        if stream_id not in self.openai_connections and stream_id != "unknown":
-            await self.connect_to_openai_enhanced(stream_id)
-    async def handle_exotel_media(self, stream_id: str, data: dict):
-        """Handle incoming audio from Exotel with enhanced variable chunk processing"""
-        
-        # **ENHANCED: Auto-establish OpenAI connection if missing**
+        if stream_id == "unknown":
+            return
+
+        # INSTANT GREETING: play cached TTS before / while Realtime connects.
+        if Config.INSTANT_GREETING and self.cached_greeting_pcm:
+            # Mark before scheduling so Realtime session.update won't double-greet.
+            self.instant_greeting_sent[stream_id] = True
+            asyncio.create_task(self._play_instant_greeting(stream_id, sample_rate))
+        elif Config.INSTANT_GREETING and not self.cached_greeting_pcm:
+            logger.warning("⚡ Instant greeting enabled but cache empty — will use Realtime greeting")
+
         if stream_id not in self.openai_connections:
+            # Background connect (do not block Exotel receive loop).
+            asyncio.create_task(self.connect_to_openai_enhanced(stream_id))
+
+    async def handle_exotel_media(self, stream_id: str, data: dict):
+        """Forward Exotel mic PCM to OpenAI with fixed framing + stateful upsample."""
+
+        # Optional half-duplex: skip mic while bot audio is on the wire.
+        if self.half_duplex and self.bot_speaking.get(stream_id):
+            return
+
+        if stream_id not in self.openai_connections:
+            if stream_id in self._openai_connecting:
+                # Connect already in flight from start — don't spam reconnects.
+                return
             logger.warning(f"⚠️ No OpenAI connection for {stream_id} - ESTABLISHING NOW")
             await self.connect_to_openai_enhanced(stream_id)
-            
-            # Wait a moment for connection to establish
             await asyncio.sleep(0.1)
-            
             if stream_id not in self.openai_connections:
                 logger.error(f"❌ Failed to establish OpenAI connection for {stream_id}")
                 return
-        
-        if stream_id in self.openai_connections:
-            # Get audio payload from Exotel
-            media = data.get("media", {})
-            audio_payload = media.get("payload", "")
-            
-            if audio_payload:
-                try:
-                    # Get connection-specific settings
-                    sample_rate = self.connection_sample_rates.get(stream_id, self.default_sample_rate)
-                    target_chunk_bytes = self.connection_chunk_sizes.get(stream_id, 0)
-                    
-                    # Decode PCM audio from Exotel
-                    exotel_pcm = base64.b64decode(audio_payload)
-                    
-                    # **ENHANCED NOISE SUPPRESSION**: Apply audio enhancement
-                    enhanced_pcm = self.apply_noise_suppression(exotel_pcm, sample_rate)
-                    
-                    # Initialize buffer for this stream if needed
-                    if stream_id not in self.audio_buffers:
-                        self.audio_buffers[stream_id] = b""
-                    
-                    # Add enhanced audio to buffer
-                    self.audio_buffers[stream_id] += enhanced_pcm
-                    
-                    # **ENHANCED VARIABLE CHUNK PROCESSING**
-                    if self.variable_chunk_support:
-                        # Process variable chunks (minimum 20ms as per Exotel spec)
-                        await self._process_variable_chunks(stream_id, sample_rate)
-                    else:
-                        # Traditional fixed chunk processing
-                        await self._process_fixed_chunks(stream_id, target_chunk_bytes, sample_rate)
-                    
-                except Exception as e:
-                    logger.error(f"❌ Error processing enhanced buffered audio: {e}")
-        else:
-            logger.warning(f"⚠️ Still no OpenAI connection for {stream_id} after connection attempt")
+
+        media = data.get("media", {})
+        audio_payload = media.get("payload") or media.get("Payload") or ""
+        if not audio_payload:
+            return
+
+        try:
+            sample_rate = self.connection_sample_rates.get(stream_id, self.default_sample_rate)
+            target_chunk_bytes = self.connection_chunk_sizes.get(
+                stream_id, Config.get_chunk_size_bytes(sample_rate, Config.INBOUND_CHUNK_MS)
+            )
+
+            exotel_pcm = base64.b64decode(audio_payload)
+            if len(exotel_pcm) % 2:
+                exotel_pcm = exotel_pcm[:-1]
+            if not exotel_pcm:
+                return
+
+            # Passthrough by default — enhancement can muddy telephony audio.
+            pcm = self.apply_noise_suppression(exotel_pcm, sample_rate)
+
+            if stream_id not in self.audio_buffers:
+                self.audio_buffers[stream_id] = b""
+            self.audio_buffers[stream_id] += pcm
+
+            if self.variable_chunk_support:
+                await self._process_variable_chunks(stream_id, sample_rate)
+            else:
+                await self._process_fixed_chunks(stream_id, target_chunk_bytes, sample_rate)
+
+        except Exception as e:
+            logger.error(f"❌ Error processing Exotel media: {e}")
 
     async def _process_variable_chunks(self, stream_id: str, sample_rate: int):
         """Process audio with variable chunk sizes (Enhanced Exotel feature)"""
@@ -316,14 +354,23 @@ class OpenAIRealtimeSalesBot:
         try:
             # Get OpenAI connection config
             openai_config = self.openai_connections[stream_id]
-            input_format = openai_config.get("input_format", "raw/slin")
-            
+            input_format = openai_config.get("input_format", "pcm16")
+            wire_hz = getattr(Config, "OPENAI_PCM_RATE", 24000)
+
             # Convert audio based on sample rate and format
-            if input_format == "pcm16" and sample_rate >= 16000:
-                # High quality PCM for 16kHz+ 
-                openai_audio = chunk  # Already PCM16
+            if input_format in ("pcm16", "audio/pcm"):
+                # GA expects linear PCM @ 24 kHz; upsample from Exotel rate (stateful).
+                openai_audio = chunk
+                if sample_rate != wire_hz:
+                    openai_audio = self._ratecv(
+                        chunk,
+                        sample_rate,
+                        wire_hz,
+                        stream_id,
+                        self.inbound_ratecv_state,
+                    )
             else:
-                # Convert to G.711 u-law for lower sample rates or telephony compatibility
+                # Legacy G.711 u-law path (kept for compatibility)
                 openai_audio = self.convert_pcm_to_ulaw(chunk)
             
             openai_audio_b64 = base64.b64encode(openai_audio).decode()
@@ -337,7 +384,7 @@ class OpenAIRealtimeSalesBot:
             openai_ws = openai_config["websocket"]
             await openai_ws.send(json.dumps(openai_msg))
             
-            logger.debug(f"📤 AUDIO SENT TO OPENAI: {len(chunk)} bytes PCM → {len(openai_audio)} bytes {input_format}")
+            logger.debug(f"📤 AUDIO SENT TO OPENAI: {len(chunk)} bytes PCM@{sample_rate} → {len(openai_audio)} bytes {input_format}")
             
         except Exception as e:
             logger.error(f"❌ Error sending audio to OpenAI: {e}")
@@ -403,15 +450,17 @@ class OpenAIRealtimeSalesBot:
                     }
                     await openai_ws.send(json.dumps(cancel_response_msg))
                 
-                # 3. Clear local audio buffer
+                # 3. Clear local inbound + outbound audio buffers
                 if stream_id in self.audio_buffers:
                     self.audio_buffers[stream_id] = b""
                     logger.info(f"🧹 CLEARED LOCAL AUDIO BUFFER for {stream_id}")
+                await self._clear_outbound(stream_id)
                 
             except Exception as e:
                 logger.error(f"❌ Error handling enhanced clear event: {e}")
         else:
             logger.warning(f"⚠️ No OpenAI connection to clear for {stream_id}")
+            await self._clear_outbound(stream_id)
 
     async def _commit_audio_buffer(self, stream_id: str):
         """Commit any remaining audio in buffer to OpenAI (enhanced feature)"""
@@ -436,6 +485,9 @@ class OpenAIRealtimeSalesBot:
 
     async def connect_to_openai_enhanced(self, stream_id: str):
         """Establish enhanced connection to OpenAI Realtime API with dynamic configuration"""
+        if stream_id in self.openai_connections or stream_id in self._openai_connecting:
+            return
+        self._openai_connecting.add(stream_id)
         try:
             sample_rate = self.connection_sample_rates.get(stream_id, self.default_sample_rate)
             logger.info(f"🔗 CONNECTING TO OPENAI (ENHANCED) for {stream_id} @ {sample_rate}Hz")
@@ -502,6 +554,11 @@ class OpenAIRealtimeSalesBot:
                 logger.error("💡 Authentication Error - check OpenAI API key")
             elif "websocket" in str(e).lower():
                 logger.error("💡 WebSocket Error - check connection and headers")
+            # Instant greeting may still be playing; allow mic after connect failure.
+            if not self.instant_greeting_sent.get(stream_id):
+                self.bot_speaking[stream_id] = False
+        finally:
+            self._openai_connecting.discard(stream_id)
 
     async def configure_openai_session_enhanced(self, stream_id: str):
         """Configure enhanced OpenAI Realtime session"""
@@ -527,49 +584,40 @@ class OpenAIRealtimeSalesBot:
             ready = openai_connection.get("session_ready")
             if ready is not None:
                 try:
-                    # Short wait — greeting should not sit behind a 3s timeout.
-                    await asyncio.wait_for(ready.wait(), timeout=0.8)
+                    await asyncio.wait_for(ready.wait(), timeout=2.0)
                 except asyncio.TimeoutError:
                     logger.warning(f"⚠️ session.updated timeout for {stream_id}; sending greeting anyway")
             
-            # Send enhanced initial greeting
+            # Skip Realtime greeting only after instant greeting was actually queued.
+            if self.instant_greeting_sent.get(stream_id):
+                logger.info(f"⚡ Skipping Realtime greeting (instant cache) for {stream_id}")
+                return
+
             await self.send_initial_greeting_enhanced(stream_id)
             
         except Exception as e:
             logger.error(f"❌ Error configuring enhanced OpenAI session: {e}")
 
     async def send_initial_greeting_enhanced(self, stream_id: str):
-        """Send enhanced initial sales greeting through OpenAI"""
+        """Fast path: one response.create (no extra conversation.item round-trip)."""
         try:
             openai_ws = self.openai_connections[stream_id]["websocket"]
-            sample_rate = self.connection_sample_rates.get(stream_id, self.default_sample_rate)
-            
-            # Create enhanced conversation item with greeting
-            greeting_msg = {
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "message",
-                    "role": "user",
-                    "content": [{
-                        "type": "input_text", 
-                        "text": f"A customer just called our sales line. The connection is running at {sample_rate}Hz audio quality. Please greet them warmly and ask how you can help them today."
-                    }]
-                }
-            }
-            
-            await openai_ws.send(json.dumps(greeting_msg))
-            
-            # Create enhanced response with audio focus (GA: output_modalities)
+            name = Config.SALES_BOT_NAME
+            company = Config.COMPANY_NAME
+
             response_msg = {
                 "type": "response.create",
                 "response": {
                     "output_modalities": ["audio"],
-                    "instructions": "Give a warm, professional greeting. Keep it concise and natural."
-                }
+                    "instructions": (
+                        f"You are {name} from {company}. Greet the caller in one short "
+                        "warm sentence and ask how you can help. Do not mention sample rates "
+                        "or technical details. Do not repeat yourself."
+                    ),
+                },
             }
             await openai_ws.send(json.dumps(response_msg))
-            
-            logger.info(f"👋 ENHANCED INITIAL GREETING SENT for {stream_id} @ {sample_rate}Hz")
+            logger.info(f"👋 ENHANCED INITIAL GREETING SENT for {stream_id}")
             
         except Exception as e:
             logger.error(f"❌ Error sending enhanced initial greeting: {e}")
@@ -604,8 +652,15 @@ class OpenAIRealtimeSalesBot:
                         logger.info(f"🎤 CUSTOMER STOPPED SPEAKING (enhanced) for {stream_id}")
                         # GA server_vad with create_response=True already starts a response;
                         # do not call response.create again (causes conversation_already_has_active_response).
+                    elif event_type in (
+                        "response.output_audio.done",
+                        "response.audio.done",
+                    ):
+                        # Flush as soon as audio stream ends (nodejs flushAudioBuffer).
+                        await self._flush_outbound(stream_id)
                     elif event_type == "response.done":
                         logger.info(f"✅ SARAH FINISHED RESPONSE (enhanced) for {stream_id}")
+                        await self._flush_outbound(stream_id)
                     elif event_type == "error":
                         err = data.get("error") or {}
                         # Benign race when cancel fires after response already ended
@@ -628,17 +683,30 @@ class OpenAIRealtimeSalesBot:
             logger.error(f"❌ Error in enhanced OpenAI response handler: {e}")
 
     async def _handle_customer_interruption(self, stream_id: str, openai_ws):
-        """Handle customer interruption with enhanced response cancellation"""
+        """Barge-in: clear Exotel playback + cancel OpenAI (nodejs BargeInHandler)."""
         try:
-            # Enhanced interruption handling
+            await self._clear_outbound(stream_id)
+            await self._send_exotel_clear(stream_id)
             cancel_response_msg = {
                 "type": "response.cancel"
             }
             await openai_ws.send(json.dumps(cancel_response_msg))
             logger.info(f"🛑 ENHANCED BOT INTERRUPTED - Customer started speaking for {stream_id}")
-            
+
         except Exception as e:
             logger.error(f"❌ Error handling enhanced customer interruption: {e}")
+
+    async def _send_exotel_clear(self, stream_id: str) -> None:
+        """Tell Exotel to drop unplayed bot audio (nodejs sender.sendClear)."""
+        conn = self.exotel_connections.get(stream_id)
+        if not conn:
+            return
+        try:
+            await conn["websocket"].send(
+                json.dumps({"event": "clear", "streamSid": stream_id})
+            )
+        except Exception as e:
+            logger.debug(f"clear send failed for {stream_id}: {e}")
 
     async def trigger_openai_response_enhanced(self, stream_id: str, openai_ws):
         """Trigger enhanced OpenAI response generation with improved parameters"""
@@ -659,68 +727,284 @@ class OpenAIRealtimeSalesBot:
         except Exception as e:
             logger.error(f"❌ Error triggering enhanced OpenAI response: {e}")
 
+    def _outbound_frame_bytes(self, sample_rate: int) -> int:
+        """Exotel media frame size (~100ms → 3200 bytes @ 8 kHz; multiple of 320)."""
+        ms = max(20, int(getattr(Config, "EXOTEL_OUTBOUND_FRAME_MS", 100)))
+        frame = max(320, int(sample_rate * (ms / 1000.0) * 2))
+        return max(320, (frame // 320) * 320)
+
+    def _resample_block_bytes(self, rate: int) -> int:
+        ms = max(20, int(getattr(Config, "OPENAI_RESAMPLE_BLOCK_MS", 100)))
+        return max(2, int(rate * (ms / 1000.0) * 2) // 2 * 2)
+
+    def _soft_limit_pcm16(self, pcm: bytes) -> bytes:
+        """Prevent rare post-resample peaks that cause clicks/hiss on the phone."""
+        if not pcm or len(pcm) < 2:
+            return pcm
+        if len(pcm) % 2:
+            pcm = pcm[:-1]
+        try:
+            import array
+
+            samples = array.array("h")
+            samples.frombytes(pcm)
+            peak = 0
+            for s in samples:
+                a = s if s >= 0 else -s
+                if a > peak:
+                    peak = a
+            if peak <= 30000:
+                return pcm
+            scale = 28000.0 / peak
+            for i, s in enumerate(samples):
+                samples[i] = int(s * scale)
+            return samples.tobytes()
+        except Exception:
+            return pcm
+
+    def _ratecv(
+        self,
+        pcm: bytes,
+        from_rate: int,
+        to_rate: int,
+        state_key: str,
+        state_map: Dict[str, Any],
+    ) -> bytes:
+        """Stateful ratecv — avoids clicks/hiss from resetting filter each delta."""
+        if from_rate == to_rate or not pcm:
+            return pcm
+        if len(pcm) % 2:
+            pcm = pcm[:-1]
+        if not pcm:
+            return pcm
+        try:
+            import audioop
+
+            converted, new_state = audioop.ratecv(
+                pcm, 2, 1, from_rate, to_rate, state_map.get(state_key)
+            )
+            state_map[state_key] = new_state
+            return self._soft_limit_pcm16(converted)
+        except Exception as e:
+            logger.warning(f"⚠️ ratecv failed ({e}); falling back")
+            return self._soft_limit_pcm16(self._resample_audio(pcm, from_rate, to_rate))
+
+    async def _clear_outbound(self, stream_id: str) -> None:
+        """Drop queued outbound PCM and stop the drain task."""
+        self.bot_speaking[stream_id] = False
+        self.outbound_buffers[stream_id] = bytearray()
+        self.outbound_pcm24[stream_id] = bytearray()
+        self.outbound_ratecv_state.pop(stream_id, None)
+        self.outbound_flush[stream_id] = False
+        task = self.outbound_drain_tasks.pop(stream_id, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+
+    async def _flush_outbound(self, stream_id: str) -> None:
+        """Resample any remaining PCM24, then drain short Exotel tail."""
+        wire_hz = getattr(Config, "OPENAI_PCM_RATE", 24000)
+        sample_rate = self.connection_sample_rates.get(stream_id, self.default_sample_rate)
+        pcm24 = self.outbound_pcm24.setdefault(stream_id, bytearray())
+        if pcm24:
+            converted = self._ratecv(
+                bytes(pcm24),
+                wire_hz,
+                sample_rate,
+                stream_id,
+                self.outbound_ratecv_state,
+            )
+            pcm24.clear()
+            if converted:
+                self.outbound_buffers.setdefault(stream_id, bytearray()).extend(converted)
+        self.outbound_flush[stream_id] = True
+        self._ensure_outbound_drainer(stream_id)
+
+    def _ensure_outbound_drainer(self, stream_id: str) -> None:
+        task = self.outbound_drain_tasks.get(stream_id)
+        if task is None or task.done():
+            self.outbound_drain_tasks[stream_id] = asyncio.create_task(
+                self._drain_outbound_to_exotel(stream_id)
+            )
+
+    async def _drain_outbound_to_exotel(self, stream_id: str) -> None:
+        """Send OpenAI→Exotel frames ASAP (nodejs sendMedia) with optional light pacing."""
+        clock = time.monotonic()
+        frames_sent = 0
+        pace = max(0.0, float(getattr(Config, "OUTBOUND_PACE_FACTOR", 0.0)))
+        try:
+            while stream_id in self.exotel_connections:
+                sample_rate = self.connection_sample_rates.get(
+                    stream_id, self.default_sample_rate
+                )
+                frame_bytes = self._outbound_frame_bytes(sample_rate)
+                frame_sec = (frame_bytes / 2) / max(sample_rate, 1)
+                buf = self.outbound_buffers.setdefault(stream_id, bytearray())
+                flush = self.outbound_flush.get(stream_id, False)
+
+                if len(buf) >= frame_bytes:
+                    frame = bytes(buf[:frame_bytes])
+                    del buf[:frame_bytes]
+                    self.bot_speaking[stream_id] = True
+                    await self._send_exotel_media_frame(stream_id, frame, sample_rate)
+                    frames_sent += 1
+                    if pace > 0:
+                        target = clock + frames_sent * frame_sec * pace
+                        delay = target - time.monotonic()
+                        if delay > 0.001:
+                            await asyncio.sleep(delay)
+                        elif delay < -0.1:
+                            clock = time.monotonic()
+                            frames_sent = 0
+                        else:
+                            await asyncio.sleep(0)
+                    else:
+                        # Yield so Exotel receive loop stays responsive (no realtime wait).
+                        await asyncio.sleep(0)
+                    continue
+
+                if flush and len(buf) >= 2:
+                    # Pad to full MIN frame like nodejs flushAudioBuffer (3200 B).
+                    frame = bytes(buf)
+                    buf.clear()
+                    self.outbound_flush[stream_id] = False
+                    if len(frame) % 2:
+                        frame = frame[:-1]
+                    if frame and len(frame) < frame_bytes:
+                        frame = frame + (b"\x00" * (frame_bytes - len(frame)))
+                    elif frame and len(frame) % 320:
+                        frame = frame + (b"\x00" * (320 - (len(frame) % 320)))
+                    if frame:
+                        self.bot_speaking[stream_id] = True
+                        await self._send_exotel_media_frame(stream_id, frame, sample_rate)
+                        if pace > 0:
+                            await asyncio.sleep(frame_sec * pace)
+                        else:
+                            await asyncio.sleep(0)
+                    self.bot_speaking[stream_id] = False
+                    break
+
+                if flush and len(buf) < 2:
+                    self.outbound_flush[stream_id] = False
+                    self.bot_speaking[stream_id] = False
+                    break
+
+                await asyncio.sleep(0.005)
+        except asyncio.CancelledError:
+            self.bot_speaking[stream_id] = False
+            raise
+        except Exception as e:
+            logger.error(f"❌ Outbound drain error for {stream_id}: {e}")
+            self.bot_speaking[stream_id] = False
+        finally:
+            current = self.outbound_drain_tasks.get(stream_id)
+            if current is asyncio.current_task():
+                self.outbound_drain_tasks.pop(stream_id, None)
+
+    async def _send_exotel_media_frame(
+        self, stream_id: str, pcm: bytes, sample_rate: int
+    ) -> None:
+        if stream_id not in self.exotel_connections or not pcm:
+            return
+        if len(pcm) % 2:
+            pcm = pcm[:-1]
+        if not pcm:
+            return
+
+        conn = self.exotel_connections[stream_id]
+        exotel_ws = conn["websocket"]
+        seq = self.outbound_seq.get(stream_id, 0) + 1
+        self.outbound_seq[stream_id] = seq
+        t0 = conn.get("start_time") or time.time()
+        elapsed_ms = int((time.time() - t0) * 1000)
+
+        if not conn.get("first_audio_logged"):
+            logger.info(
+                f"first_audio_ms={elapsed_ms} stream={stream_id} rate={sample_rate} "
+                f"frame_bytes={len(pcm)}"
+            )
+            conn["first_audio_logged"] = True
+            openai_conn = self.openai_connections.get(stream_id)
+            if openai_conn is not None:
+                openai_conn["first_audio_logged"] = True
+
+        # Match shared AgentStream media_event: chunk + timestamp + sequenceNumber.
+        media_message = {
+            "event": "media",
+            "streamSid": stream_id,
+            "media": {
+                "payload": base64.b64encode(pcm).decode("ascii"),
+                "chunk": str(seq),
+                "timestamp": str(elapsed_ms),
+                "sequenceNumber": str(seq),
+            },
+        }
+        await exotel_ws.send(json.dumps(media_message))
+        logger.debug(
+            f"📞 EXOTEL FRAME: {len(pcm)} bytes PCM @{sample_rate}Hz "
+            f"seq={seq} ts={elapsed_ms}"
+        )
+
     async def handle_openai_audio_delta_enhanced(self, stream_id: str, data: dict):
-        """Handle enhanced audio response from OpenAI with multi-sample rate support"""
+        """Queue OpenAI PCM24, stateful-resample in blocks, pace Exotel frames."""
         try:
             if stream_id not in self.exotel_connections:
                 logger.warning(f"⚠️ No Exotel connection for {stream_id}")
                 return
-            
-            # Get audio from OpenAI
+
             audio_delta = data.get("delta", "")
             if not audio_delta:
                 return
-            
-            # Get connection settings
+
             sample_rate = self.connection_sample_rates.get(stream_id, self.default_sample_rate)
             openai_conn = self.openai_connections[stream_id]
-            output_format = openai_conn.get("output_format", "g711_ulaw")
-            
-            # Decode audio based on format
-            openai_audio = base64.b64decode(audio_delta)
-            
-            # Wire rates: pcmu/g711 is always 8 kHz; GA PCM output is 24 kHz.
-            # Never resample using DEFAULT_SAMPLE_RATE as the source (pitch bugs).
-            if output_format in ("pcm16", "audio/pcm") and sample_rate >= 16000:
-                wire_hz = 24000
-                exotel_pcm = openai_audio
-                if sample_rate != wire_hz:
-                    exotel_pcm = self._resample_audio(exotel_pcm, wire_hz, sample_rate)
-            else:
-                # g711_ulaw / audio/pcmu → PCM16 @ 8 kHz, then upsample if needed
-                wire_hz = 8000
-                exotel_pcm = self.convert_ulaw_to_pcm(openai_audio)
-                if sample_rate != wire_hz:
-                    exotel_pcm = self._resample_audio(exotel_pcm, wire_hz, sample_rate)
+            output_format = openai_conn.get("output_format", "pcm16")
 
-            # TTFA: first speech audio after Exotel start
-            if not openai_conn.get("first_audio_logged"):
-                t0 = self.exotel_connections.get(stream_id, {}).get("start_time")
-                if t0:
-                    ms = (time.time() - t0) * 1000
-                    logger.info(f"first_audio_ms={ms:.0f} stream={stream_id} (openai speech)")
-                openai_conn["first_audio_logged"] = True
-            
-            exotel_audio_b64 = base64.b64encode(exotel_pcm).decode()
-            
-            # Send to Exotel with enhanced message format
-            exotel_ws = self.exotel_connections[stream_id]["websocket"]
-            
-            media_message = {
-                "event": "media",
-                "streamSid": stream_id,
-                "media": {
-                    "payload": exotel_audio_b64,
-                    "timestamp": str(int(time.time() * 1000)),
-                    "sequenceNumber": str(int(time.time()))
-                }
-            }
-            
-            await exotel_ws.send(json.dumps(media_message))
-            logger.debug(f"📞 ENHANCED SARAH'S VOICE SENT: {len(openai_audio)} bytes {output_format} → {len(exotel_pcm)} bytes PCM @ {sample_rate}Hz")
-            
+            openai_audio = base64.b64decode(audio_delta)
+            if not openai_audio:
+                return
+
+            wire_hz = getattr(Config, "OPENAI_PCM_RATE", 24000)
+
+            if output_format in ("pcm16", "audio/pcm"):
+                if len(openai_audio) % 2:
+                    openai_audio = openai_audio[:-1]
+                pcm24 = self.outbound_pcm24.setdefault(stream_id, bytearray())
+                pcm24.extend(openai_audio)
+                block = self._resample_block_bytes(wire_hz)
+                out_buf = self.outbound_buffers.setdefault(stream_id, bytearray())
+                while len(pcm24) >= block:
+                    chunk = bytes(pcm24[:block])
+                    del pcm24[:block]
+                    out_buf.extend(
+                        self._ratecv(
+                            chunk,
+                            wire_hz,
+                            sample_rate,
+                            stream_id,
+                            self.outbound_ratecv_state,
+                        )
+                    )
+            else:
+                # Legacy μ-law @ 8 kHz
+                pcm8 = self.convert_ulaw_to_pcm(openai_audio)
+                if sample_rate != 8000:
+                    pcm8 = self._ratecv(
+                        pcm8, 8000, sample_rate, stream_id, self.outbound_ratecv_state
+                    )
+                self.outbound_buffers.setdefault(stream_id, bytearray()).extend(pcm8)
+
+            self.outbound_flush[stream_id] = False
+            self.bot_speaking[stream_id] = True
+            self._ensure_outbound_drainer(stream_id)
+
         except Exception as e:
-            logger.error(f"❌ Error sending enhanced audio to Exotel: {e}")
+            logger.error(f"❌ Error queueing enhanced audio for Exotel: {e}")
 
     async def handle_openai_function_call_enhanced(self, stream_id: str, data: dict):
         """Handle enhanced function calls from OpenAI with improved error handling"""
@@ -851,30 +1135,35 @@ class OpenAIRealtimeSalesBot:
         return transfer_result
 
     def _resample_audio(self, audio_data: bytes, from_rate: int, to_rate: int) -> bytes:
-        """Resample audio between different sample rates"""
-        if from_rate == to_rate:
+        """Resample 16-bit mono PCM between sample rates (telephony-critical)."""
+        if from_rate == to_rate or not audio_data:
             return audio_data
-            
+        if len(audio_data) % 2:
+            audio_data = audio_data[:-1]
+        if not audio_data:
+            return audio_data
+
+        # Prefer audioop (audioop-lts on Python 3.13+) — reliable and fast.
         try:
-            # Use the media resampler for high-quality resampling
-            from engines.media_resampler import MediaResampler
-            resampler = MediaResampler()
-            
-            resampled = resampler.resample_audio(
-                audio_data=audio_data,
-                from_rate=from_rate,
-                to_rate=to_rate,
-                channels=1,
-                sample_width=2
-            )
-            
-            if resampled:
-                logger.debug(f"🔄 RESAMPLED AUDIO: {from_rate}Hz → {to_rate}Hz")
-                return resampled
-            else:
-                logger.warning(f"⚠️ RESAMPLING FAILED, using original audio")
-                return audio_data
-                
+            import audioop
+
+            converted, _ = audioop.ratecv(audio_data, 2, 1, from_rate, to_rate, None)
+            logger.debug(f"🔄 RESAMPLED AUDIO: {from_rate}Hz → {to_rate}Hz ({len(audio_data)}→{len(converted)} B)")
+            return converted
+        except Exception as e:
+            logger.warning(f"⚠️ audioop resample failed ({e}); trying numpy")
+
+        try:
+            import numpy as np
+
+            samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+            n_out = max(1, int(round(len(samples) * to_rate / from_rate)))
+            x_old = np.linspace(0.0, 1.0, num=len(samples), endpoint=False)
+            x_new = np.linspace(0.0, 1.0, num=n_out, endpoint=False)
+            resampled = np.interp(x_new, x_old, samples)
+            out = np.clip(resampled, -32768, 32767).astype(np.int16).tobytes()
+            logger.debug(f"🔄 RESAMPLED AUDIO (numpy): {from_rate}Hz → {to_rate}Hz")
+            return out
         except Exception as e:
             logger.error(f"❌ Error resampling audio: {e}")
             return audio_data
@@ -1040,10 +1329,15 @@ class OpenAIRealtimeSalesBot:
     async def start_server(self):
         """Start the WebSocket server"""
         try:
+            if Config.INSTANT_GREETING:
+                await self._cache_greeting_pcm()
+
             logger.info(f'🚀 Starting Enhanced Sales Bot Server on {Config.SERVER_HOST}:{Config.SERVER_PORT}')
             logger.info('📞 Ready for Enhanced Exotel streaming connections!')
-            logger.info('🎵 Multi-sample rate support: 8kHz, 16kHz, 24kHz')
-            logger.info('📦 Variable chunk sizes: minimum 20ms')
+            logger.info(
+                f'🎵 Outbound {Config.EXOTEL_OUTBOUND_FRAME_MS}ms frames | '
+                f'pace={Config.OUTBOUND_PACE_FACTOR} | instant_greeting={bool(self.cached_greeting_pcm)}'
+            )
             logger.info('✨ Enhanced mark/clear event handling')
             logger.info('🔐 Using secure environment-based configuration')
             
@@ -1060,6 +1354,124 @@ class OpenAIRealtimeSalesBot:
         except Exception as e:
             logger.error(f'❌ Enhanced Server Error: {e}')
             raise
+
+    async def _cache_greeting_pcm(self) -> None:
+        """Pre-cache OpenAI TTS greeting at Exotel rate (nodejs cacheGreeting)."""
+        text = (Config.GREETING_TEXT or "").strip()
+        if not text:
+            return
+        logger.info("⏳ Pre-caching greeting audio via OpenAI TTS...")
+        t0 = time.time()
+        try:
+            pcm24 = await asyncio.to_thread(self._fetch_openai_tts_pcm, text)
+            if not pcm24:
+                logger.warning("⚠️ Greeting cache empty — Realtime greeting will be used")
+                return
+            # TTS pcm is 24 kHz mono; resample once to default Exotel rate.
+            pcm8 = self._resample_audio(pcm24, Config.OPENAI_PCM_RATE, self.default_sample_rate)
+            self.cached_greeting_pcm = pcm8
+            logger.info(
+                f"✅ Greeting cached in {int((time.time() - t0) * 1000)}ms "
+                f"({len(pcm8)} bytes @ {self.default_sample_rate}Hz)"
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Could not pre-cache greeting: {e}")
+
+    def _tts_voice_for_cache(self) -> str:
+        """Map Realtime voice names to TTS-1 voices."""
+        allowed = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
+        voice = (self.openai_voice or "alloy").lower()
+        if voice in allowed:
+            return voice
+        # coral / sage / etc. → closest common TTS voice
+        return "nova" if voice in {"coral", "shimmer", "verse"} else "alloy"
+
+    def _fetch_openai_tts_pcm(self, text: str) -> bytes:
+        """Sync OpenAI /v1/audio/speech → raw PCM24 (tts-1)."""
+        import urllib.error
+        import urllib.request
+
+        body = json.dumps(
+            {
+                "model": "tts-1",
+                # Realtime voices (e.g. coral) may not exist on TTS-1.
+                "voice": self._tts_voice_for_cache(),
+                "input": text,
+                "response_format": "pcm",
+                "speed": 1.0,
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/audio/speech",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {self.openai_api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"TTS HTTP {e.code}: {detail}") from e
+
+    async def _play_instant_greeting(self, stream_id: str, sample_rate: int) -> None:
+        """Burst-send cached greeting in Exotel min chunks (nodejs onStart)."""
+        pcm = self.cached_greeting_pcm
+        if not pcm or stream_id not in self.exotel_connections:
+            return
+
+        # If call sample rate differs from cache, resample once.
+        if sample_rate != self.default_sample_rate:
+            pcm = self._resample_audio(pcm, self.default_sample_rate, sample_rate)
+
+        self.instant_greeting_sent[stream_id] = True
+        self.bot_speaking[stream_id] = True
+        t0 = time.time()
+        frame = self._outbound_frame_bytes(sample_rate)
+        offset = 0
+        frames = 0
+        try:
+            while offset < len(pcm) and stream_id in self.exotel_connections:
+                chunk = pcm[offset : offset + frame]
+                offset += len(chunk)
+                if len(chunk) < 2:
+                    break
+                if len(chunk) < frame:
+                    chunk = chunk + (b"\x00" * (frame - len(chunk)))
+                await self._send_exotel_media_frame(stream_id, chunk, sample_rate)
+                frames += 1
+                await asyncio.sleep(0)  # yield; no realtime wait (nodejs sendMedia)
+            # Mark so Exotel can acknowledge playback boundary.
+            await self._send_exotel_mark(stream_id, "greeting-complete")
+            logger.info(
+                f"⚡ INSTANT greeting sent in {int((time.time() - t0) * 1000)}ms "
+                f"({frames} frames) for {stream_id}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Instant greeting failed for {stream_id}: {e}")
+        finally:
+            # Mic open after greeting dump; Realtime will set speaking again on deltas.
+            self.bot_speaking[stream_id] = False
+
+    async def _send_exotel_mark(self, stream_id: str, name: str) -> None:
+        conn = self.exotel_connections.get(stream_id)
+        if not conn:
+            return
+        try:
+            await conn["websocket"].send(
+                json.dumps(
+                    {
+                        "event": "mark",
+                        "streamSid": stream_id,
+                        "mark": {"name": name},
+                    }
+                )
+            )
+        except Exception as e:
+            logger.debug(f"mark send failed for {stream_id}: {e}")
 
     async def handle_exotel_dtmf(self, message: Dict[str, Any], stream_id: str):
         """Handle DTMF events from Exotel"""
@@ -1078,6 +1490,16 @@ class OpenAIRealtimeSalesBot:
     async def cleanup_connections(self, stream_id: str):
         """Enhanced cleanup of both Exotel and OpenAI connections"""
         try:
+            await self._clear_outbound(stream_id)
+            self.outbound_buffers.pop(stream_id, None)
+            self.outbound_pcm24.pop(stream_id, None)
+            self.outbound_ratecv_state.pop(stream_id, None)
+            self.inbound_ratecv_state.pop(stream_id, None)
+            self.outbound_seq.pop(stream_id, None)
+            self.outbound_flush.pop(stream_id, None)
+            self.bot_speaking.pop(stream_id, None)
+            self.instant_greeting_sent.pop(stream_id, None)
+
             # Close OpenAI connection
             if stream_id in self.openai_connections:
                 openai_ws = self.openai_connections[stream_id]["websocket"]

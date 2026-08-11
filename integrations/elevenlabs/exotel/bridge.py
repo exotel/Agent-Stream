@@ -453,6 +453,9 @@ class ConversationBridge:
 
         self.user_audio_buffer = AudioBuffer()
         self.agent_audio_buffer = AudioBuffer(chunk_size=config.chunk_size)
+        # Half-duplex: suppress mic→EL while agent audio is playing (stops parrot/echo).
+        self.agent_speaking = False
+        self._agent_speak_idle_polls = 0
 
         self.outbound_sequence = 0
         self.outbound_chunk = 0
@@ -504,6 +507,8 @@ class ConversationBridge:
 
         self.user_audio_buffer = AudioBuffer()
         self.agent_audio_buffer = AudioBuffer(chunk_size=self.config.chunk_size)
+        self.agent_speaking = False
+        self._agent_speak_idle_polls = 0
 
         self.bg_mixer = None
         if self.config.bg_sound_file and os.path.isfile(self.config.bg_sound_file):
@@ -590,13 +595,24 @@ class ConversationBridge:
             # Format per ElevenLabs docs: dynamic_variables at top level
             conversation_initiation_data = {
                 "dynamic_variables": dynamic_vars,
-                # Optional: Add conversation_config_override here if needed
-                # "conversation_config_override": {
-                #     "agent": {
-                #         "first_message": "Hello! I see you're calling from {{caller_number}}.",
-                #         "language": "en"
-                #     }
-                # }
+                # Prevent parrot/echo replies; keep first turn short.
+                "conversation_config_override": {
+                    "agent": {
+                        "prompt": {
+                            "prompt": (
+                                "You are a helpful Exotel Agent Stream phone assistant. "
+                                "Never repeat or parrot the caller's words back to them. "
+                                "Never say 'you said' or read their sentence back. "
+                                "Answer briefly with new information only. "
+                                "If unclear, ask one short clarifying question."
+                            )
+                        },
+                        "first_message": (
+                            "Hi! Welcome to the Exotel Agent Stream demo. "
+                            "How can I help you today?"
+                        ),
+                    }
+                },
             }
             logger.info(f"Passing dynamic variables to agent: {dynamic_vars}")
             if self.call_logger:
@@ -635,6 +651,12 @@ class ConversationBridge:
         chunks_sent = 0
 
         while self.active and self.elevenlabs and self.elevenlabs.connected:
+            # Half-duplex: do not feed caller audio into EL while the agent is talking.
+            if self.agent_speaking:
+                _ = self.user_audio_buffer.get(timeout=0.05)  # drain / drop
+                await asyncio.sleep(0.01)
+                continue
+
             audio_base64 = self.user_audio_buffer.get(timeout=0.05)
 
             if audio_base64:
@@ -785,6 +807,7 @@ class ConversationBridge:
             if self.call_logger:
                 self.call_logger.log_elevenlabs("User interrupted agent")
             self.agent_audio_buffer.clear()
+            self.agent_speaking = False
             self._send_clear_to_exotel()
 
         elif msg_type == "agent_response_correction":
@@ -888,64 +911,97 @@ class ConversationBridge:
         self.exotel_ws.send(message)
 
     def _playback_agent_audio(self):
-        """Stream audio to Exotel, mixing agent speech with background sound."""
+        """Stream audio to Exotel in ~100ms frames (Exotel AgentStream sweet spot).
+
+        ElevenLabs often delivers multi-second PCM blobs. Sending those whole
+        caused only ~15 oversized frames to reach the phone before hangup, so
+        the greeting sounded cut off and follow-up replies never played.
+        """
         exotel_logger.info(
             "Starting agent audio playback (with background sound mixing)"
         )
 
         exotel_hz = getattr(self, "exotel_sample_rate", EXOTEL_SAMPLE_RATE)
         BYTES_PER_SECOND = exotel_hz * 2  # 16-bit mono
+        # ~100ms frames, 320-byte aligned (same as shared wss_server.send_pcm)
+        frame_bytes = max(320, int(exotel_hz * 0.1) * 2)
+        frame_bytes = max(320, (frame_bytes // CHUNK_ALIGNMENT) * CHUNK_ALIGNMENT)
+        frame_sec = (frame_bytes / 2) / max(exotel_hz, 1)
         BG_CHUNK_DURATION_S = 0.02  # 20ms
         BG_CHUNK_BYTES = int(BYTES_PER_SECOND * BG_CHUNK_DURATION_S)
 
         # Use a shorter poll timeout when background sound is active so we
         # keep sending ambient audio even while the agent is silent.
-        poll_timeout = BG_CHUNK_DURATION_S if self.bg_mixer else 0.1
+        poll_timeout = BG_CHUNK_DURATION_S if self.bg_mixer else 0.05
+        pending = bytearray()
+
+        def _emit_frame(frame: bytes) -> None:
+            payload = frame
+            if self.bg_mixer:
+                bg_bytes = self.bg_mixer.get_chunk(len(payload))
+                payload = mix_audio(payload, bg_bytes, self.bg_mixer.volume)
+            self.outbound_chunk += 1
+            b64 = base64.b64encode(payload).decode()
+            self._send_media_to_exotel(b64)
+            if self.outbound_chunk <= 5 or self.outbound_chunk % 50 == 0:
+                exotel_logger.info(
+                    f">>> SEND [media] chunk={self.outbound_chunk}, "
+                    f"{len(b64)} b64 chars ({len(payload)} bytes)"
+                )
+            time.sleep(frame_sec * 0.9)
 
         while self.active and self.exotel_ws:
             audio_base64 = self.agent_audio_buffer.get(timeout=poll_timeout)
 
             if audio_base64:
                 try:
-                    self.outbound_chunk += 1
-
-                    if self.bg_mixer:
-                        agent_bytes = base64.b64decode(audio_base64)
-                        bg_bytes = self.bg_mixer.get_chunk(len(agent_bytes))
-                        mixed = mix_audio(agent_bytes, bg_bytes, self.bg_mixer.volume)
-                        audio_base64 = base64.b64encode(mixed).decode()
-
-                    self._send_media_to_exotel(audio_base64)
-
-                    if self.outbound_chunk <= 5 or self.outbound_chunk % 20 == 0:
-                        exotel_logger.info(
-                            f">>> SEND [media] chunk={self.outbound_chunk}, "
-                            f"{len(audio_base64)} b64 chars"
-                        )
-
-                    approx_bytes = len(audio_base64) * 3 // 4
-                    chunk_duration = approx_bytes / BYTES_PER_SECOND
-                    time.sleep(chunk_duration * 0.9)
-
+                    self.agent_speaking = True
+                    self._agent_speak_idle_polls = 0
+                    pending.extend(base64.b64decode(audio_base64))
+                    while len(pending) >= frame_bytes:
+                        frame = bytes(pending[:frame_bytes])
+                        del pending[:frame_bytes]
+                        _emit_frame(frame)
                 except Exception as e:
                     exotel_logger.error(f"Error sending audio to Exotel: {e}")
 
-            elif self.bg_mixer and self.bg_mixer.enabled and self.bg_mixer.volume > 0:
-                # Agent is silent -- keep the ambient sound playing
+            elif pending and len(pending) >= 2:
+                # Flush a short tail when the agent goes silent briefly.
                 try:
-                    bg_bytes = self.bg_mixer.get_chunk(BG_CHUNK_BYTES)
-                    # Apply volume (bg_bytes is raw PCM, scale each sample)
-                    samples = array.array("h")
-                    samples.frombytes(bg_bytes)
-                    vol = self.bg_mixer.volume
-                    scaled = array.array(
-                        "h",
-                        [max(-32768, min(32767, int(s * vol))) for s in samples],
-                    )
-                    bg_base64 = base64.b64encode(scaled.tobytes()).decode()
-                    self._send_media_to_exotel(bg_base64)
+                    self.agent_speaking = True
+                    self._agent_speak_idle_polls = 0
+                    frame = bytes(pending)
+                    pending.clear()
+                    if len(frame) % 2:
+                        frame = frame[:-1]
+                    if len(frame) % CHUNK_ALIGNMENT:
+                        pad = CHUNK_ALIGNMENT - (len(frame) % CHUNK_ALIGNMENT)
+                        frame = frame + (b"\x00" * pad)
+                    _emit_frame(frame)
                 except Exception as e:
-                    exotel_logger.error(f"Error sending background audio: {e}")
+                    exotel_logger.error(f"Error flushing audio to Exotel: {e}")
+
+            else:
+                # No agent audio — after a short idle, open the mic path again.
+                self._agent_speak_idle_polls += 1
+                if self._agent_speak_idle_polls >= 10:  # ~0.5s with 50ms polls
+                    self.agent_speaking = False
+                if self.bg_mixer and self.bg_mixer.enabled and self.bg_mixer.volume > 0:
+                    # Agent is silent -- keep the ambient sound playing
+                    try:
+                        bg_bytes = self.bg_mixer.get_chunk(BG_CHUNK_BYTES)
+                        # Apply volume (bg_bytes is raw PCM, scale each sample)
+                        samples = array.array("h")
+                        samples.frombytes(bg_bytes)
+                        vol = self.bg_mixer.volume
+                        scaled = array.array(
+                            "h",
+                            [max(-32768, min(32767, int(s * vol))) for s in samples],
+                        )
+                        bg_base64 = base64.b64encode(scaled.tobytes()).decode()
+                        self._send_media_to_exotel(bg_base64)
+                    except Exception as e:
+                        exotel_logger.error(f"Error sending background audio: {e}")
 
         exotel_logger.info(
             f"Agent audio playback stopped (sent {self.outbound_chunk} chunks)"
@@ -1174,6 +1230,7 @@ def _handle_exotel_stream(ws, agent_id_override: Optional[str] = None):
                 exotel_logger.info(f"    Clear event received")
                 if bridge:
                     bridge.agent_audio_buffer.clear()
+                    bridge.agent_speaking = False
 
             elif event_type == "stop":
                 stop_data = data.get("stop", {})

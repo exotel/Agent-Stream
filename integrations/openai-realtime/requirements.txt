@@ -1,15 +1,6 @@
-# Voice AI Bot Dependencies
+# OpenAI Realtime ↔ Exotel AgentStream (bridge only)
 
-# Core dependencies
 websockets==11.0.3
 python-dotenv
-openai
-asyncio
-
-# Audio processing
-pydub
 numpy
-
-# Optional: for better audio quality
-# librosa
-# soundfile
+audioop-lts; python_version >= "3.13"

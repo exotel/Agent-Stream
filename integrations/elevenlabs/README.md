@@ -14,7 +14,9 @@ Bidirectional AgentStream bridge: Exotel phone audio ↔ ElevenLabs ConvAI agent
 | Public WSS | ngrok or cloudflared (Exotel needs reachable `wss://`) |
 | Exotel env | Copy [`shared/env.exotel.example`](../../shared/env.exotel.example) → `shared/.env.exotel` |
 
-**Audio tip:** Prefer agent output format **`pcm_8000`** in ElevenLabs so the bridge skips 16→8 kHz resample (avoids low/“ghost” pitch).
+**Audio tip:** Prefer agent output format **`pcm_8000`** in ElevenLabs so the bridge skips 16→8 kHz resample (avoids low/“ghost” pitch). Outbound to Exotel is paced in ~100 ms frames.
+
+**Secrets:** Put keys only in env / local files — never commit API keys or `.env`.
 
 ## 3 steps + test call
 

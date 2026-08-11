@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import Config
-from core.openai_realtime_sales_bot import main as bot_main
+from core.bot import main as bot_main
 
 def main():
     """Main entry point"""
