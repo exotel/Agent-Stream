@@ -4,6 +4,8 @@ Pluggable **STT → LLM → TTS** voice bot over Exotel WebSocket media using Pi
 
 Default pipeline: **Deepgram STT** → **OpenAI LLM** → **Cartesia TTS** (swap services in `bot.py` as needed).
 
+**Docs portal article:** [Build a modular voice agent with Pipecat on Exotel AgentStream](../../docs/exotel-developer/pipecat.md)
+
 ## Exotel / Pipecat notes
 
 From the [serializer docs](https://docs.pipecat.ai/api-reference/server/services/serializers/exotel) and [Exotel WebSocket guide](https://docs.pipecat.ai/pipecat/telephony/exotel-websockets):
@@ -34,18 +36,20 @@ wss://YOUR_HOST/ws?sample-rate=8000
 ## Connect Voice AI test
 
 ```bash
-# Terminal 1: python server.py  (+ ngrok http 8765)
+# Terminal 1: python server.py  (+ cloudflared tunnel --url http://127.0.0.1:8765)
 python ../../shared/place_connect_call.py \
   --to +91XXXXXXXXXX \
   --stream-url "wss://YOUR_HOST/ws?sample-rate=8000"
 ```
 
-See [docs/CONNECT_VOICE_AI.md](../../docs/CONNECT_VOICE_AI.md).
+See [docs/exotel-developer/pipecat.md](../../docs/exotel-developer/pipecat.md) and [Connect Voice AI](../../docs/exotel-developer/connect-voice-ai.md).
 
 ## Files
 
 | File | Role |
 |------|------|
 | `server.py` | FastAPI WSS host + ExotelFrameSerializer transport |
-| `bot.py` | Pipeline (STT / LLM / TTS) |
+| `bot.py` | Pipeline (STT / LLM / TTS), VAD + Smart Turn |
+| `greeting_cache.py` | Boot-time Cartesia greeting (same voice as live TTS) |
+| `voice_config.py` | Shared voice / rate / encoding |
 | `ATTRIBUTION.md` | Upstream Pipecat examples credit |

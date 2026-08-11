@@ -16,6 +16,9 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -27,14 +30,19 @@ from pipecat.transports.websocket.fastapi import (
 )
 
 from bot import run_bot
-
-load_dotenv(override=True)
+from greeting_cache import warm_greeting_cache
+from voice_config import cartesia_voice_id, greeting_text
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        await warm_greeting_cache()
+    except Exception:
+        logger.exception("Greeting warm failed — will fall back to live TTS")
     logger.info(
-        "Pipecat Exotel bridge ready — WSS /ws (Connect Voice AI StreamUrl)"
+        "Pipecat Exotel bridge ready — WSS /ws "
+        f"voice={cartesia_voice_id()} greeting={greeting_text()!r}"
     )
     yield
 

@@ -8,7 +8,8 @@ Paste these into [Exotel AgentStream](https://docs.exotel.com/exotel-agentstream
 2. ElevenLabs Conversational AI — [elevenlabs.md](elevenlabs.md)
 3. OpenAI Realtime — [openai-realtime.md](openai-realtime.md)
 4. Sarvam STT/TTS — [sarvam.md](sarvam.md)
-5. Latency notes (internal) — [LATENCY_NOTES.md](LATENCY_NOTES.md)
+5. Pipecat modular pipeline — [pipecat.md](pipecat.md)
+6. Latency notes (internal) — [LATENCY_NOTES.md](LATENCY_NOTES.md)
 
 ## What each integration folder solves
 
@@ -17,6 +18,7 @@ Paste these into [Exotel AgentStream](https://docs.exotel.com/exotel-agentstream
 | [`integrations/elevenlabs`](../../integrations/elevenlabs) | Bridge Exotel phone audio to an ElevenLabs ConvAI agent (speech-to-speech). |
 | [`integrations/openai-realtime`](../../integrations/openai-realtime) | Bridge Exotel to OpenAI Realtime GA (speech-to-speech, 24 kHz wire, 8 kHz on the phone). |
 | [`integrations/sarvam`](../../integrations/sarvam) | Sarvam Saaras STT + Bulbul TTS over AgentStream (cascaded, good for Indian languages). |
+| [`integrations/pipecat`](../../integrations/pipecat) | Pipecat + ExotelFrameSerializer: pluggable Deepgram → OpenAI → Cartesia (or swap stages). |
 | [`shared/place_connect_call.py`](../../shared/place_connect_call.py) | Place a Connect Voice AI test call without building your own API client. |
 
 Keep StreamUrl paths in sync with the provider READMEs when you edit either side.
