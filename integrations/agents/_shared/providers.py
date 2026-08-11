@@ -88,7 +88,9 @@ async def stt_sarvam(pcm: bytes, sample_rate: int) -> str:
             headers={"api-subscription-key": key},
             files={"file": ("audio.wav", _wav_bytes(pcm16, rate), "audio/wav")},
             data={
-                "model": "saaras:v2",
+                # saaras:v2 is rejected by current Sarvam API; v3 is the documented default.
+                "model": os.getenv("SARVAM_STT_MODEL", "saaras:v3"),
+                "mode": "transcribe",
                 "language_code": os.getenv("SARVAM_STT_LANGUAGE", "en-IN"),
             },
         )

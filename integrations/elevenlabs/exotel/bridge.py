@@ -10,8 +10,9 @@ import asyncio
 import argparse
 import threading
 import time
+import audioop
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass, field
 from queue import Queue, Empty
 
@@ -143,6 +144,10 @@ EXOTEL_BIT_DEPTH = 16
 EXOTEL_CHANNELS = 1
 BYTES_PER_SAMPLE = EXOTEL_BIT_DEPTH // 8
 
+# ElevenLabs ConvAI commonly negotiates pcm_16000. Exotel AgentStream is 8 kHz.
+# Passthrough without resample plays 16 kHz as 8 kHz → slow/deep "ghost" voice.
+ELEVENLABS_DEFAULT_PCM_RATE = 16000
+
 CHUNK_ALIGNMENT = 320
 MIN_CHUNK_SIZE = 3200
 MAX_CHUNK_SIZE = 102400
@@ -150,6 +155,42 @@ DEFAULT_CHUNK_SIZE = 6400
 DEFAULT_URL_AGENT_ID_FALLBACK = os.getenv(
     "DEFAULT_URL_AGENT_ID_FALLBACK", os.getenv("ELEVENLABS_AGENT_ID", "")
 )
+
+
+def parse_elevenlabs_pcm_rate(
+    fmt: Optional[str], default: int = ELEVENLABS_DEFAULT_PCM_RATE
+) -> int:
+    """Parse ``pcm_16000`` / ``ulaw_8000`` style format strings → Hz."""
+    if not fmt:
+        return default
+    token = str(fmt).strip().lower().replace("-", "_")
+    if "_" not in token:
+        return default
+    try:
+        return int(token.split("_", 1)[1])
+    except ValueError:
+        return default
+
+
+def resample_pcm16le(pcm: bytes, from_rate: int, to_rate: int) -> bytes:
+    """Resample 16-bit little-endian mono PCM between sample rates."""
+    if not pcm or from_rate == to_rate:
+        return pcm
+    if len(pcm) % 2:
+        pcm = pcm[:-1]
+    if not pcm:
+        return pcm
+    converted, _ = audioop.ratecv(pcm, 2, 1, from_rate, to_rate, None)
+    return converted
+
+
+def convert_b64_pcm_rate(
+    audio_b64: str, from_rate: int, to_rate: int
+) -> Tuple[str, int]:
+    """Base64 PCM16 → resample → base64. Returns (b64, output_byte_len)."""
+    pcm = base64.b64decode(audio_b64)
+    out = resample_pcm16le(pcm, from_rate, to_rate)
+    return base64.b64encode(out).decode("ascii"), len(out)
 
 
 @dataclass
@@ -434,6 +475,10 @@ class ConversationBridge:
         self.metadata = metadata
         self.active = True
         self.start_time = time.time()
+        # Prefer AgentStream start.media_format.sample_rate over hard-coded 8 kHz
+        rate = int(getattr(metadata, "sample_rate", None) or EXOTEL_SAMPLE_RATE)
+        self.exotel_sample_rate = rate if rate in (8000, 16000, 24000) else EXOTEL_SAMPLE_RATE
+        self._first_audio_logged = False
 
         self.call_logger = CallLogger(
             call_sid=metadata.call_sid, stream_sid=metadata.stream_sid
@@ -444,6 +489,9 @@ class ConversationBridge:
         self.call_logger.log_exotel(f"Account SID: {metadata.account_sid}")
         self.call_logger.log_exotel(
             f"Encoding: {metadata.encoding}, Sample Rate: {metadata.sample_rate}, Bit Rate: {metadata.bit_rate}"
+        )
+        self.call_logger.log_exotel(
+            f"Bridge Exotel playback rate: {self.exotel_sample_rate} Hz"
         )
         if metadata.custom_parameters:
             self.call_logger.log_exotel(
@@ -579,9 +627,10 @@ class ConversationBridge:
         self._close_exotel_stream()
 
     async def _send_audio_to_elevenlabs(self):
-        """Pass base64 audio directly from Exotel to ElevenLabs (no conversion)."""
+        """Forward Exotel PCM to ElevenLabs, resampling to the negotiated input rate."""
+        exotel_hz = getattr(self, "exotel_sample_rate", EXOTEL_SAMPLE_RATE)
         elevenlabs_logger.info(
-            "Starting audio passthrough (Exotel -> ElevenLabs) [NO CONVERSION]"
+            f"Starting audio forwarder (Exotel {exotel_hz} Hz -> ElevenLabs, with resample)"
         )
         chunks_sent = 0
 
@@ -589,17 +638,25 @@ class ConversationBridge:
             audio_base64 = self.user_audio_buffer.get(timeout=0.05)
 
             if audio_base64:
+                el_rate = parse_elevenlabs_pcm_rate(
+                    self.elevenlabs.audio_format_in, ELEVENLABS_DEFAULT_PCM_RATE
+                )
+                if el_rate != exotel_hz:
+                    audio_base64, _ = convert_b64_pcm_rate(
+                        audio_base64, exotel_hz, el_rate
+                    )
                 await self.elevenlabs.send_audio(audio_base64)
                 chunks_sent += 1
 
                 if chunks_sent == 1:
                     elevenlabs_logger.info(
-                        f">>> SEND - First user audio chunk sent to ElevenLabs (passthrough)"
+                        f">>> SEND - First user audio chunk to ElevenLabs "
+                        f"({exotel_hz}→{el_rate} Hz)"
                     )
 
             await asyncio.sleep(0.01)
 
-        elevenlabs_logger.info(f"Audio passthrough stopped (sent {chunks_sent} chunks)")
+        elevenlabs_logger.info(f"Audio forwarder stopped (sent {chunks_sent} chunks)")
 
     async def _receive_from_elevenlabs(self):
         elevenlabs_logger.info("Starting receiver thread (ElevenLabs -> Bridge)")
@@ -651,6 +708,18 @@ class ConversationBridge:
             elevenlabs_logger.info(
                 f"    User Input Audio Format: {self.elevenlabs.audio_format_in}"
             )
+            out_hz = parse_elevenlabs_pcm_rate(self.elevenlabs.audio_format_out)
+            in_hz = parse_elevenlabs_pcm_rate(self.elevenlabs.audio_format_in)
+            exotel_hz = getattr(self, "exotel_sample_rate", EXOTEL_SAMPLE_RATE)
+            if out_hz != exotel_hz or in_hz != exotel_hz:
+                elevenlabs_logger.info(
+                    f"    Resampling enabled: Exotel {exotel_hz} Hz ↔ "
+                    f"EL in {in_hz} Hz / out {out_hz} Hz"
+                )
+            if out_hz not in (8000, None) and exotel_hz == 8000:
+                elevenlabs_logger.info(
+                    "    Tip: set agent output to pcm_8000 in ElevenLabs to skip resample"
+                )
             elevenlabs_logger.debug(f"    Full event: {json.dumps(event, indent=2)}")
             if self.call_logger:
                 self.call_logger.log_elevenlabs(
@@ -665,10 +734,24 @@ class ConversationBridge:
             audio_base64 = audio_event.get("audio_base_64")
             event_id = audio_event.get("event_id")
             if audio_base64:
-                elevenlabs_logger.debug(
-                    f"    Audio chunk received (event_id: {event_id}, {len(audio_base64)} b64 chars)"
+                # ElevenLabs output is often pcm_16000; Exotel needs AgentStream rate.
+                exotel_hz = getattr(self, "exotel_sample_rate", EXOTEL_SAMPLE_RATE)
+                el_rate = parse_elevenlabs_pcm_rate(
+                    self.elevenlabs.audio_format_out, ELEVENLABS_DEFAULT_PCM_RATE
                 )
-                # Pass base64 directly to buffer (no conversion needed - agent uses same format as Exotel)
+                if el_rate != exotel_hz:
+                    audio_base64, out_len = convert_b64_pcm_rate(
+                        audio_base64, el_rate, exotel_hz
+                    )
+                    elevenlabs_logger.debug(
+                        f"    Audio chunk resampled {el_rate}→{exotel_hz} "
+                        f"(event_id: {event_id}, {out_len} bytes)"
+                    )
+                else:
+                    elevenlabs_logger.debug(
+                        f"    Audio chunk received (event_id: {event_id}, "
+                        f"{len(audio_base64)} b64 chars)"
+                    )
                 self.agent_audio_buffer.put(audio_base64)
 
         elif msg_type == "agent_response":
@@ -787,6 +870,9 @@ class ConversationBridge:
         """Send a media event to the Exotel WebSocket."""
         elapsed_ms = int((time.time() - self.start_time) * 1000)
         self.outbound_sequence += 1
+        if not getattr(self, "_first_audio_logged", False):
+            self._first_audio_logged = True
+            exotel_logger.info(f"first_audio_ms={elapsed_ms} stream={self.stream_sid}")
 
         message = json.dumps(
             {
@@ -807,9 +893,10 @@ class ConversationBridge:
             "Starting agent audio playback (with background sound mixing)"
         )
 
-        BYTES_PER_SECOND = 16000  # 8kHz * 2 bytes per sample
+        exotel_hz = getattr(self, "exotel_sample_rate", EXOTEL_SAMPLE_RATE)
+        BYTES_PER_SECOND = exotel_hz * 2  # 16-bit mono
         BG_CHUNK_DURATION_S = 0.02  # 20ms
-        BG_CHUNK_BYTES = int(BYTES_PER_SECOND * BG_CHUNK_DURATION_S)  # 320 bytes
+        BG_CHUNK_BYTES = int(BYTES_PER_SECOND * BG_CHUNK_DURATION_S)
 
         # Use a shorter poll timeout when background sound is active so we
         # keep sending ambient audio even while the agent is silent.
@@ -867,9 +954,8 @@ class ConversationBridge:
     def process_exotel_audio(
         self, payload: str, chunk: int = None, timestamp: str = None
     ):
-        """Pass base64 audio directly to the buffer (no conversion)."""
+        """Queue Exotel media payload (base64 PCM16 @ AgentStream rate, typically 8 kHz)."""
         if self.active and payload:
-            # Pass base64 directly - no decoding needed since agent uses same format
             self.user_audio_buffer.put(payload)
 
     def process_dtmf(self, digit: str, duration: int = None):

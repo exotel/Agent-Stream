@@ -12,7 +12,6 @@ from __future__ import annotations
 import base64
 import io
 import os
-import struct
 import wave
 from typing import Optional, Tuple
 
@@ -33,9 +32,17 @@ def create_wav(pcm: bytes, sample_rate: int) -> bytes:
 
 
 def resample_linear(pcm: bytes, from_rate: int, to_rate: int) -> bytes:
-    """Simple linear resample for 16-bit mono PCM (use scipy/librosa in production at scale)."""
-    if from_rate == to_rate:
+    """Resample 16-bit mono PCM. Prefer audioop; fall back to linear interpolation."""
+    if from_rate == to_rate or not pcm:
         return pcm
+    try:
+        import audioop
+
+        out, _ = audioop.ratecv(pcm, 2, 1, from_rate, to_rate, None)
+        return out
+    except Exception:
+        pass
+
     import array
 
     samples = array.array("h")
@@ -55,6 +62,26 @@ def resample_linear(pcm: bytes, from_rate: int, to_rate: int) -> bytes:
             v = samples[min(idx, len(samples) - 1)]
         out.append(int(max(-32768, min(32767, v))))
     return out.tobytes()
+
+
+def _pcm_from_sarvam_audio(raw: bytes) -> Tuple[bytes, Optional[int]]:
+    """Decode Sarvam TTS payload → (pcm16le mono, sample_rate_or_None)."""
+    if len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WAVE":
+        with wave.open(io.BytesIO(raw), "rb") as wf:
+            if wf.getsampwidth() != 2 or wf.getnchannels() not in (1, 2):
+                raise ValueError(
+                    f"unsupported WAV: channels={wf.getnchannels()} width={wf.getsampwidth()}"
+                )
+            frames = wf.readframes(wf.getnframes())
+            rate = wf.getframerate()
+            if wf.getnchannels() == 2:
+                # downmix stereo → mono
+                import audioop
+
+                frames = audioop.tomono(frames, 2, 0.5, 0.5)
+            return frames, rate
+    # Raw linear16 mono — caller must know the request rate
+    return raw, None
 
 
 def transcribe_sarvam(
@@ -100,36 +127,60 @@ def synthesize_sarvam(
     api_key: str,
     language: Optional[str] = None,
     *,
+    output_sample_rate: int = 8000,
     timeout: float = 15.0,
 ) -> bytes:
     """
-    Returns 8 kHz 16-bit mono PCM for Exotel Agent Stream.
+    Returns 16-bit mono PCM for Exotel AgentStream.
+
+    Requests TTS at ``output_sample_rate`` when supported (8000 / 16000 / 24000)
+    so we avoid a lossy 24→8 kHz downmix on the telephony path. Falls back to
+    24000 + resample if the API rejects the requested rate.
     """
     lang = language or tts_language_for_text(text)
-    resp = requests.post(
-        SARVAM_TTS_URL,
-        headers={
-            "Content-Type": "application/json",
-            "api-subscription-key": api_key,
-        },
-        json={
-            "text": text,
-            "target_language_code": lang,
-            "speaker": "shubh",
-            "model": "bulbul:v3",
-            "speech_sample_rate": "24000",
-            "output_audio_codec": "linear16",
-            "pace": 1.0,
-        },
-        timeout=timeout,
-    )
+    # Prefer native telephony rate; Sarvam accepts 8000 / 16000 / 22050 / 24000.
+    want = output_sample_rate if output_sample_rate in (8000, 16000, 24000) else 8000
+    speaker = os.getenv("SARVAM_TTS_SPEAKER", "shubh")
+    model = os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
+
+    def _request(rate: int) -> requests.Response:
+        return requests.post(
+            SARVAM_TTS_URL,
+            headers={
+                "Content-Type": "application/json",
+                "api-subscription-key": api_key,
+            },
+            json={
+                "text": text,
+                "target_language_code": lang,
+                "speaker": speaker,
+                "model": model,
+                "speech_sample_rate": str(rate),
+                "output_audio_codec": "linear16",
+                "pace": 1.0,
+            },
+            timeout=timeout,
+        )
+
+    resp = _request(want)
+    request_rate = want
+    if resp.status_code >= 400 and want != 24000:
+        resp = _request(24000)
+        request_rate = 24000
     resp.raise_for_status()
     b64 = resp.json()["audios"][0]
     raw = base64.b64decode(b64)
-    if raw[:4] == b"RIFF":
-        raw = raw[44:]  # strip minimal WAV header
-    pcm_24k = raw
-    return resample_linear(pcm_24k, 24000, 8000)
+    pcm, wav_rate = _pcm_from_sarvam_audio(raw)
+    src_rate = wav_rate or request_rate
+    # If API ignored speech_sample_rate=8000 and returned raw 24 kHz PCM without a
+    # WAV header, duration vs spoken length is ~3× short when decoded as 8 kHz.
+    if wav_rate is None and request_rate == 8000 and want == 8000 and len(pcm) >= 4:
+        words = max(1, len(text.split()))
+        expected_ms = max(600, words * 350)  # rough spoken duration
+        audio_ms_at_8k = (len(pcm) / 2) / 8000 * 1000
+        if audio_ms_at_8k < expected_ms * 0.45:
+            src_rate = 24000
+    return resample_linear(pcm, src_rate, want)
 
 
 if __name__ == "__main__":
@@ -137,5 +188,6 @@ if __name__ == "__main__":
     if not key:
         print("Set SARVAM_API_KEY to run smoke test")
         raise SystemExit(1)
-    pcm8 = synthesize_sarvam("Namaste, yeh ek test hai.", key, "hi-IN")
-    print(f"TTS OK: {len(pcm8)} bytes @ 8kHz")
+    pcm8 = synthesize_sarvam("Namaste, yeh ek test hai.", key, "hi-IN", output_sample_rate=8000)
+    ms = (len(pcm8) / 2) / 8000 * 1000
+    print(f"TTS OK: {len(pcm8)} bytes @ 8kHz (~{ms:.0f} ms)")

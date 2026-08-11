@@ -36,15 +36,31 @@ def resample_pcm16(pcm: bytes, from_rate: int, to_rate: int) -> bytes:
     return converted
 
 
-def media_event(stream_sid: str, pcm: bytes, chunk: Optional[int] = None) -> dict:
-    body = {
+def media_event(
+    stream_sid: str,
+    pcm: bytes,
+    chunk: Optional[int] = None,
+    *,
+    timestamp_ms: Optional[int] = None,
+    sequence_number: Optional[int] = None,
+) -> dict:
+    """Build an outbound AgentStream media event (bot → Exotel).
+
+    Exotel examples include timestamp + sequenceNumber; omit them and some
+    Connect streams drop / end early.
+    """
+    media: dict = {"payload": b64_pcm_encode(pcm)}
+    if chunk is not None:
+        media["chunk"] = str(chunk)
+    if timestamp_ms is not None:
+        media["timestamp"] = str(timestamp_ms)
+    if sequence_number is not None:
+        media["sequenceNumber"] = str(sequence_number)
+    return {
         "event": "media",
         "streamSid": stream_sid,
-        "media": {"payload": b64_pcm_encode(pcm)},
+        "media": media,
     }
-    if chunk is not None:
-        body["media"]["chunk"] = chunk
-    return body
 
 
 def clear_event(stream_sid: str) -> dict:

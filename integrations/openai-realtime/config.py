@@ -30,8 +30,9 @@ class Config:
     LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     
     # ===== AUDIO PROCESSING =====
-    SAMPLE_RATE = int(os.getenv('SAMPLE_RATE', '24000'))
-    DEFAULT_SAMPLE_RATE = int(os.getenv('DEFAULT_SAMPLE_RATE', '24000'))
+    # Telephony default is 8 kHz (Exotel AgentStream). Override via env / ?sample-rate=.
+    SAMPLE_RATE = int(os.getenv('SAMPLE_RATE', '8000'))
+    DEFAULT_SAMPLE_RATE = int(os.getenv('DEFAULT_SAMPLE_RATE', '8000'))
     SUPPORTED_SAMPLE_RATES = [8000, 16000, 24000]
     AUDIO_CHUNK_SIZE = int(os.getenv('AUDIO_CHUNK_SIZE', '10'))
     MIN_CHUNK_SIZE_MS = int(os.getenv('MIN_CHUNK_SIZE_MS', '20'))
@@ -160,15 +161,44 @@ class Config:
         return int(sample_rate * chunk_size_ms / 1000) * 2  # 2 bytes per sample (16-bit)
     
     @classmethod
+    def get_wire_audio_format(cls, sample_rate: int) -> str:
+        """Internal wire format used for PCM↔μ-law conversion helpers."""
+        # Telephony 8 kHz uses G.711 μ-law (GA: audio/pcmu). Higher rates use PCM16.
+        return 'g711_ulaw' if sample_rate <= 8000 else 'pcm16'
+
+    @classmethod
     def get_enhanced_session_config(cls, sample_rate: int, voice: str) -> Dict[str, Any]:
-        """Get enhanced session configuration"""
+        """GA Realtime session.update payload (no OpenAI-Beta header)."""
+        use_ulaw = sample_rate <= 8000
+        if use_ulaw:
+            input_format = {"type": "audio/pcmu"}
+            output_format = {"type": "audio/pcmu"}
+        else:
+            # GA PCM requires an explicit rate on input; output PCM is 24 kHz.
+            rate = 24000 if sample_rate >= 24000 else 16000
+            input_format = {"type": "audio/pcm", "rate": rate}
+            output_format = {"type": "audio/pcm"}
+
         return {
-            'model': cls.OPENAI_MODEL,
-            'voice': voice,
-            'input_audio_format': 'g711_ulaw',
-            'output_audio_format': 'g711_ulaw',
-            'input_audio_transcription': {'model': 'whisper-1'},
-            'turn_detection': {'type': 'server_vad', 'threshold': 0.5},
-            'temperature': cls.TEMPERATURE,
-            'max_response_output_tokens': 4096
+            "type": "realtime",
+            "model": cls.OPENAI_MODEL,
+            "output_modalities": ["audio"],
+            "instructions": (
+                f"You are {cls.SALES_BOT_NAME}, a professional sales representative "
+                f"for {cls.COMPANY_NAME}. Be warm, concise, and helpful on phone calls."
+            ),
+            "audio": {
+                "input": {
+                    "format": input_format,
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "create_response": True,
+                    },
+                },
+                "output": {
+                    "format": output_format,
+                    "voice": voice,
+                },
+            },
         } 

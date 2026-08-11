@@ -71,10 +71,15 @@ cp shared/env.exotel.example .env.exotel   # fill in values
 set -a && source .env.exotel && set +a
 
 # Point StreamUrl at whichever integration you started
+# ElevenLabs:  wss://HOST/v1/convai/conversation/exotel
+# OpenAI:      wss://HOST/?sample-rate=8000
+# Sarvam:      wss://HOST/ws?sample-rate=8000
 python shared/place_connect_call.py \
   --to +91XXXXXXXXXX \
   --stream-url "wss://YOUR_PUBLIC_HOST/?sample-rate=8000"
 ```
+
+Provider 3-step guides: [ElevenLabs](../integrations/elevenlabs/README.md), [OpenAI Realtime](../integrations/openai-realtime/README.md), [Sarvam](../integrations/sarvam/README.md). Drafts for docs.exotel.com: [docs/exotel-developer/](exotel-developer/).
 
 ## Notes
 

@@ -5,3 +5,4 @@ python-dotenv
 gunicorn<23
 gevent
 gevent-websocket
+audioop-lts>=0.2.1; python_version >= "3.13"

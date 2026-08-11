@@ -80,8 +80,18 @@ class OpenAIRealtimeSalesBot:
             except:
                 websocket_path = '/'
             detected_sample_rate = self.default_sample_rate  # Use default sample rate
+            try:
+                from urllib.parse import urlparse, parse_qs
+                qs = parse_qs(urlparse(websocket_path).query)
+                raw = (qs.get("sample-rate") or qs.get("sample_rate") or [None])[0]
+                if raw is not None:
+                    rate = int(str(raw).replace("Hz", "").replace("hz", "").strip())
+                    if rate in Config.SUPPORTED_SAMPLE_RATES:
+                        detected_sample_rate = rate
+            except Exception:
+                pass
             logger.info(f"📞 NEW ENHANCED SALES CALL from Exotel: {websocket.remote_address}")
-            logger.info(f"🎵 Detected sample rate: {detected_sample_rate}Hz")
+            logger.info(f"🎵 Detected sample rate: {detected_sample_rate}Hz (path={websocket_path})")
             
             # Set up connection keep-alive and error handling
             async for message in websocket:
@@ -192,8 +202,11 @@ class OpenAIRealtimeSalesBot:
         except Exception as e:
             logger.error(f"❌ Error sending enhanced test tone: {e}")
         
-        # Start enhanced OpenAI Realtime connection
-        await self.connect_to_openai_enhanced(stream_id)
+        # Defer OpenAI until we have a real stream_sid (comes on start)
+        if stream_id and stream_id != "unknown":
+            await self.connect_to_openai_enhanced(stream_id)
+        else:
+            logger.info("⏳ Waiting for Exotel start event before connecting OpenAI")
 
     async def handle_exotel_start(self, stream_id: str, data: dict):
         """Handle enhanced Exotel start event with sample rate detection"""
@@ -205,6 +218,8 @@ class OpenAIRealtimeSalesBot:
             media_format = data["mediaFormat"]
             logger.info(f"📺 Media Format: {json.dumps(media_format, indent=2)}")
 
+        if stream_id not in self.openai_connections and stream_id != "unknown":
+            await self.connect_to_openai_enhanced(stream_id)
     async def handle_exotel_media(self, stream_id: str, data: dict):
         """Handle incoming audio from Exotel with enhanced variable chunk processing"""
         
@@ -433,16 +448,16 @@ class OpenAIRealtimeSalesBot:
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
             
-            # Enhanced headers for latest API version
+            # GA Realtime: Authorization only (OpenAI-Beta realtime=v1 is rejected)
             headers = [
                 ("Authorization", f"Bearer {self.openai_api_key}"),
-                ("OpenAI-Beta", "realtime=v1")
             ]
             
             # Connect to OpenAI Realtime API with enhanced SSL context
+            # websockets 11.x uses extra_headers (additional_headers is 12+/13+)
             openai_ws = await websockets.connect(
                 url, 
-                additional_headers=headers,
+                extra_headers=headers,
                 ssl=ssl_context,
                 ping_interval=20,  # Enhanced connection stability
                 ping_timeout=10
@@ -450,13 +465,14 @@ class OpenAIRealtimeSalesBot:
             
             # Get enhanced session configuration
             session_config = Config.get_enhanced_session_config(sample_rate, self.openai_voice)
+            wire_format = Config.get_wire_audio_format(sample_rate)
             
             self.openai_connections[stream_id] = {
                 "websocket": openai_ws,
                 "start_time": time.time(),
                 "sample_rate": sample_rate,
-                "input_format": session_config["input_audio_format"],
-                "output_format": session_config["output_audio_format"],
+                "input_format": wire_format,
+                "output_format": wire_format,
                 "session_config": session_config
             }
             
@@ -465,13 +481,17 @@ class OpenAIRealtimeSalesBot:
                 self.exotel_connections[stream_id]["openai_connected"] = True
             
             logger.info(f"✅ ENHANCED OPENAI CONNECTED for {stream_id} @ {sample_rate}Hz")
-            logger.info(f"🎵 Audio Format: {session_config['input_audio_format']} → {session_config['output_audio_format']}")
-            
-            # Configure enhanced OpenAI session
-            await self.configure_openai_session_enhanced(stream_id)
-            
-            # Start listening to OpenAI responses
+            in_fmt = session_config["audio"]["input"]["format"]["type"]
+            out_fmt = session_config["audio"]["output"]["format"]["type"]
+            logger.info(f"🎵 Audio Format: {in_fmt} → {out_fmt}")
+
+            # Listen for events before session.update so we can wait for session.updated
+            openai_connection = self.openai_connections[stream_id]
+            openai_connection["session_ready"] = asyncio.Event()
             asyncio.create_task(self.handle_openai_responses_enhanced(stream_id, openai_ws))
+            
+            # Configure enhanced OpenAI session (waits for session.updated, then greets)
+            await self.configure_openai_session_enhanced(stream_id)
             
         except Exception as e:
             logger.error(f"❌ Failed to connect to OpenAI (enhanced): {e}")
@@ -500,9 +520,17 @@ class OpenAIRealtimeSalesBot:
             await openai_ws.send(json.dumps(session_update))
             logger.info(f"🔧 ENHANCED OPENAI SESSION CONFIGURED for {stream_id}")
             logger.info(f"   🎵 Sample Rate: {sample_rate}Hz")
-            logger.info(f"   🎤 Input Format: {session_config['input_audio_format']}")
-            logger.info(f"   🔊 Output Format: {session_config['output_audio_format']}")
-            logger.info(f"   🎭 Voice: {session_config['voice']}")
+            logger.info(f"   🎤 Input Format: {session_config['audio']['input']['format']}")
+            logger.info(f"   🔊 Output Format: {session_config['audio']['output']['format']}")
+            logger.info(f"   🎭 Voice: {session_config['audio']['output'].get('voice')}")
+
+            ready = openai_connection.get("session_ready")
+            if ready is not None:
+                try:
+                    # Short wait — greeting should not sit behind a 3s timeout.
+                    await asyncio.wait_for(ready.wait(), timeout=0.8)
+                except asyncio.TimeoutError:
+                    logger.warning(f"⚠️ session.updated timeout for {stream_id}; sending greeting anyway")
             
             # Send enhanced initial greeting
             await self.send_initial_greeting_enhanced(stream_id)
@@ -531,11 +559,11 @@ class OpenAIRealtimeSalesBot:
             
             await openai_ws.send(json.dumps(greeting_msg))
             
-            # Create enhanced response with audio focus
+            # Create enhanced response with audio focus (GA: output_modalities)
             response_msg = {
                 "type": "response.create",
                 "response": {
-                    "modalities": ["audio", "text"],
+                    "output_modalities": ["audio"],
                     "instructions": "Give a warm, professional greeting. Keep it concise and natural."
                 }
             }
@@ -556,11 +584,15 @@ class OpenAIRealtimeSalesBot:
                     
                     logger.debug(f"🤖 ENHANCED OPENAI EVENT: {event_type} for {stream_id}")
                     
-                    if event_type == "response.audio.delta":
+                    # GA: response.output_audio.delta; keep beta name for safety
+                    if event_type in ("response.output_audio.delta", "response.audio.delta"):
                         await self.handle_openai_audio_delta_enhanced(stream_id, data)
                     elif event_type == "response.function_call_arguments.done":
                         await self.handle_openai_function_call_enhanced(stream_id, data)
-                    elif event_type == "response.audio_transcript.delta":
+                    elif event_type in (
+                        "response.output_audio_transcript.delta",
+                        "response.audio_transcript.delta",
+                    ):
                         transcript_delta = data.get('delta', '')
                         if transcript_delta.strip():
                             logger.info(f"🗣️ SARAH SPEAKING: {transcript_delta}")
@@ -570,14 +602,22 @@ class OpenAIRealtimeSalesBot:
                         await self._handle_customer_interruption(stream_id, openai_ws)
                     elif event_type == "input_audio_buffer.speech_stopped":
                         logger.info(f"🎤 CUSTOMER STOPPED SPEAKING (enhanced) for {stream_id}")
-                        # Enhanced response generation
-                        await self.trigger_openai_response_enhanced(stream_id, openai_ws)
+                        # GA server_vad with create_response=True already starts a response;
+                        # do not call response.create again (causes conversation_already_has_active_response).
                     elif event_type == "response.done":
                         logger.info(f"✅ SARAH FINISHED RESPONSE (enhanced) for {stream_id}")
                     elif event_type == "error":
-                        logger.error(f"❌ ENHANCED OPENAI ERROR: {data}")
+                        err = data.get("error") or {}
+                        # Benign race when cancel fires after response already ended
+                        if err.get("code") == "response_cancel_not_active":
+                            logger.debug(f"OpenAI cancel race (ignored): {err.get('message')}")
+                        else:
+                            logger.error(f"❌ ENHANCED OPENAI ERROR: {data}")
                     elif event_type == "session.updated":
                         logger.info(f"🔧 SESSION UPDATED for {stream_id}")
+                        ready = self.openai_connections.get(stream_id, {}).get("session_ready")
+                        if ready is not None and not ready.is_set():
+                            ready.set()
                         
                 except json.JSONDecodeError as e:
                     logger.error(f"❌ JSON decode error from OpenAI (enhanced): {e}")
@@ -609,10 +649,8 @@ class OpenAIRealtimeSalesBot:
             response_create = {
                 "type": "response.create",
                 "response": {
-                    "modalities": ["audio", "text"],
+                    "output_modalities": ["audio"],
                     "instructions": "Respond naturally and conversationally. Use appropriate pauses and inflections.",
-                    "voice": self.openai_voice,
-                    "temperature": Config.TEMPERATURE
                 }
             }
             await openai_ws.send(json.dumps(response_create))
@@ -635,22 +673,33 @@ class OpenAIRealtimeSalesBot:
             
             # Get connection settings
             sample_rate = self.connection_sample_rates.get(stream_id, self.default_sample_rate)
-            output_format = self.openai_connections[stream_id].get("output_format", "raw/slin")
+            openai_conn = self.openai_connections[stream_id]
+            output_format = openai_conn.get("output_format", "g711_ulaw")
             
             # Decode audio based on format
             openai_audio = base64.b64decode(audio_delta)
             
-            # Convert audio for Exotel based on sample rate and format
-            if output_format == "pcm16" and sample_rate >= 16000:
-                # High quality PCM output - convert to PCM for Exotel
+            # Wire rates: pcmu/g711 is always 8 kHz; GA PCM output is 24 kHz.
+            # Never resample using DEFAULT_SAMPLE_RATE as the source (pitch bugs).
+            if output_format in ("pcm16", "audio/pcm") and sample_rate >= 16000:
+                wire_hz = 24000
                 exotel_pcm = openai_audio
+                if sample_rate != wire_hz:
+                    exotel_pcm = self._resample_audio(exotel_pcm, wire_hz, sample_rate)
             else:
-                # G.711 u-law output - convert to PCM for Exotel
+                # g711_ulaw / audio/pcmu → PCM16 @ 8 kHz, then upsample if needed
+                wire_hz = 8000
                 exotel_pcm = self.convert_ulaw_to_pcm(openai_audio)
-            
-            # Apply resampling if needed for different sample rates
-            if sample_rate != self.default_sample_rate:
-                exotel_pcm = self._resample_audio(exotel_pcm, self.default_sample_rate, sample_rate)
+                if sample_rate != wire_hz:
+                    exotel_pcm = self._resample_audio(exotel_pcm, wire_hz, sample_rate)
+
+            # TTFA: first speech audio after Exotel start
+            if not openai_conn.get("first_audio_logged"):
+                t0 = self.exotel_connections.get(stream_id, {}).get("start_time")
+                if t0:
+                    ms = (time.time() - t0) * 1000
+                    logger.info(f"first_audio_ms={ms:.0f} stream={stream_id} (openai speech)")
+                openai_conn["first_audio_logged"] = True
             
             exotel_audio_b64 = base64.b64encode(exotel_pcm).decode()
             
@@ -710,7 +759,7 @@ class OpenAIRealtimeSalesBot:
             response_msg = {
                 "type": "response.create",
                 "response": {
-                    "modalities": ["audio", "text"],
+                    "output_modalities": ["audio"],
                     "instructions": f"Based on the function result, provide a natural response to the customer about {function_name}."
                 }
             }

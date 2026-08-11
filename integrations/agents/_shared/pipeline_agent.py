@@ -21,6 +21,18 @@ STTFn = Callable[[bytes, int], Awaitable[str]]
 LLMFn = Callable[[str], Awaitable[str]]
 TTSFn = Callable[[str, int], Awaitable[bytes]]
 
+# Process-level greeting cache: (text, sample_rate) -> pcm
+_GREETING_CACHE: dict[tuple[str, int], bytes] = {}
+
+
+def cache_greeting_pcm(text: str, sample_rate: int, pcm: bytes) -> None:
+    """Store pre-synthesized greeting for TTFA under 1s on call start."""
+    _GREETING_CACHE[(text, sample_rate)] = pcm
+
+
+def get_cached_greeting_pcm(text: str, sample_rate: int) -> Optional[bytes]:
+    return _GREETING_CACHE.get((text, sample_rate))
+
 
 class PipelineSession(AgentSession):
     def __init__(
@@ -55,9 +67,31 @@ class PipelineSession(AgentSession):
     async def on_start(self) -> None:
         self._watcher = asyncio.create_task(self._watch_silence())
         greeting = os.getenv("GREETING_TEXT", "Hello! How can I help you today?")
+        # Off the receive-loop critical path; prefer process-boot cache for TTFA.
+        self._greeting_task = asyncio.create_task(self._play_greeting(greeting))
+
+    async def _play_greeting(self, greeting: str) -> None:
         try:
-            pcm = await self._tts(greeting, self.sample_rate)
+            t0 = time.monotonic()
+            cached = get_cached_greeting_pcm(greeting, self.sample_rate)
+            if cached:
+                pcm = cached
+                tts_ms = 0.0
+                logger.info(
+                    f"greeting cache hit rate={self.sample_rate} bytes={len(pcm)}"
+                )
+            else:
+                pcm = await self._tts(greeting, self.sample_rate)
+                tts_ms = (time.monotonic() - t0) * 1000
+                cache_greeting_pcm(greeting, self.sample_rate, pcm)
+            audio_ms = (len(pcm) / 2) / max(self.sample_rate, 1) * 1000
+            logger.info(
+                f"greeting ready tts_ms={tts_ms:.0f} audio_ms={audio_ms:.0f} bytes={len(pcm)}"
+            )
             await self.send_pcm(pcm)
+            logger.info("greeting playback queued")
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("greeting TTS failed")
 
@@ -74,6 +108,13 @@ class PipelineSession(AgentSession):
             self._last_voice = time.monotonic()
 
     async def on_stop(self) -> None:
+        if getattr(self, "_greeting_task", None):
+            self._greeting_task.cancel()
+            try:
+                await self._greeting_task
+            except asyncio.CancelledError:
+                pass
+            self._greeting_task = None
         if self._watcher:
             self._watcher.cancel()
 
