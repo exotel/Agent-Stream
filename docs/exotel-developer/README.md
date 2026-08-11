@@ -1,13 +1,22 @@
-# AgentStream developer drafts (docs.exotel.com)
+# AgentStream pages for docs.exotel.com
 
-Copy-paste ready pages for [Exotel AgentStream / Connect Voice AI](https://docs.exotel.com/exotel-agentstream/connect-voice-ai-api).
+Paste these into [Exotel AgentStream](https://docs.exotel.com/exotel-agentstream) (Archbee). Runnable code lives in this repo under `integrations/`.
 
-| Draft | Maps to |
-|-------|---------|
-| [connect-voice-ai.md](connect-voice-ai.md) | Connect Voice AI overview |
-| [elevenlabs.md](elevenlabs.md) | ElevenLabs ConvAI bridge |
-| [openai-realtime.md](openai-realtime.md) | OpenAI Realtime bridge |
-| [sarvam.md](sarvam.md) | Sarvam STT/TTS echo |
-| [LATENCY_NOTES.md](LATENCY_NOTES.md) | Measured TTFA / pitch notes |
+## Suggested nav under AgentStream
 
-Canonical runnable code lives under `integrations/`. Keep StreamUrl paths in sync with those READMEs.
+1. Overview and Connect Voice AI — [connect-voice-ai.md](connect-voice-ai.md)
+2. ElevenLabs Conversational AI — [elevenlabs.md](elevenlabs.md)
+3. OpenAI Realtime — [openai-realtime.md](openai-realtime.md)
+4. Sarvam STT/TTS — [sarvam.md](sarvam.md)
+5. Latency notes (internal) — [LATENCY_NOTES.md](LATENCY_NOTES.md)
+
+## What each integration folder solves
+
+| Folder | Problem it solves |
+|--------|-------------------|
+| [`integrations/elevenlabs`](../../integrations/elevenlabs) | Bridge Exotel phone audio to an ElevenLabs ConvAI agent (speech-to-speech). |
+| [`integrations/openai-realtime`](../../integrations/openai-realtime) | Bridge Exotel to OpenAI Realtime GA (speech-to-speech, 24 kHz wire, 8 kHz on the phone). |
+| [`integrations/sarvam`](../../integrations/sarvam) | Sarvam Saaras STT + Bulbul TTS over AgentStream (cascaded, good for Indian languages). |
+| [`shared/place_connect_call.py`](../../shared/place_connect_call.py) | Place a Connect Voice AI test call without building your own API client. |
+
+Keep StreamUrl paths in sync with the provider READMEs when you edit either side.
