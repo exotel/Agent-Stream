@@ -18,6 +18,7 @@ Phone ←→ Exotel AgentStream ←WSS→ FastAPI bot ←→ Voice AI (S2S or ST
 | Gemini Live | Google Gemini Live | Function calling, multilingual | [`gemini-live-native`](gemini-live-native/) · also [`../gemini-live`](../gemini-live/) |
 | Gemini Live + Pipecat | Gemini Live | Modular VAD / pipeline | [`gemini-live-pipecat`](gemini-live-pipecat/) |
 | Grok Voice | xAI Grok Voice | S2S with VAD / barge-in | [`grok-voice-native`](grok-voice-native/) |
+| Cartesia Line | Cartesia Line agent | Managed agent over [Agents WSS](https://docs.cartesia.ai/line/integrations/websocket-api) | [`cartesia-line-native`](cartesia-line-native/) |
 
 ### STT + LLM + TTS pipelines
 

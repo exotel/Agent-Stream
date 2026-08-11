@@ -9,6 +9,7 @@ Reference notes for the three Agent-Stream sample bridges. Values move with netw
 | **Sarvam** | 8 kHz PCM16 | Sarvam HTTP STT/TTS | Greeting cached at process boot |
 | **OpenAI Realtime** | 8 kHz PCM16 | PCM16 @ **24 kHz** | Bridge resamples both ways; do not use linear PCM at 8 kHz on OpenAI |
 | **ElevenLabs** | 8 kHz PCM16 | Often `pcm_16000` | Prefer agent **`pcm_8000`** to skip resample |
+| **Cartesia Line** | 8 kHz PCM16 | `mulaw_8000` (default) | Bridge converts PCM↔μ-law; no resample at 8 kHz |
 
 ## Time to first audio
 
@@ -17,6 +18,7 @@ Reference notes for the three Agent-Stream sample bridges. Values move with netw
 | **Sarvam** | Under ~1 s (often near 0 with cache hit) | Cached greeting only; generative TTS still ~1–2 s |
 | **OpenAI** | Near 0 with `INSTANT_GREETING`; else ~1.5–3 s | Instant path uses TTS-1 cache, then Realtime for turns |
 | **ElevenLabs** | ~1–2 s | Depends on ConvAI session + first agent audio |
+| **Cartesia Line** | ~1.2–1.5 s after token prewarm | Uplink gate avoids ~4 s false barge-in; remaining cost is Cartesia ack |
 
 Outbound framing: Sarvam shared helper ~100 ms frames; OpenAI sample defaults to 200 ms / 3200-byte frames (Exotel minimum chunk size); ElevenLabs paces outbound media so the receive loop stays free.
 

@@ -43,6 +43,7 @@ cp shared/env.exotel.example shared/.env.exotel
 |-------|------|--------------|-----------|
 | [ElevenLabs](elevenlabs.md) | Speech-to-speech (ConvAI) | 10002 | `wss://HOST/v1/convai/conversation/exotel` |
 | [OpenAI Realtime](openai-realtime.md) | Speech-to-speech (Realtime GA) | 5000 | `wss://HOST/?sample-rate=8000` |
+| [Cartesia Line](cartesia-line.md) | Speech-to-speech (Line agent) | 4055 | `wss://HOST/ws?sample-rate=8000` |
 | [Sarvam](sarvam.md) | STT → TTS (Saaras / Bulbul) | 8000 | `wss://HOST/ws?sample-rate=8000` |
 | [Pipecat](pipecat.md) | STT → LLM → TTS (modular) | 8765 | `wss://HOST/ws?sample-rate=8000` |
 
