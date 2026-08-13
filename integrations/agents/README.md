@@ -29,7 +29,7 @@ Phone ←→ Exotel AgentStream ←WSS→ FastAPI bot ←→ Voice AI (S2S or ST
 | Deepgram + GPT + OpenAI TTS (Pipecat) | Deepgram Nova | GPT | OpenAI TTS | [`deepgram-gpt-openaitts-pipecat`](deepgram-gpt-openaitts-pipecat/) · also [`../pipecat`](../pipecat/) |
 | AssemblyAI + GPT + Cartesia | AssemblyAI | GPT | Cartesia Sonic | [`assemblyai-gpt-cartesia-native`](assemblyai-gpt-cartesia-native/) |
 | Sarvam + GPT + ElevenLabs | Sarvam Saaras | GPT | ElevenLabs | [`sarvam-gpt-elevenlabs-native`](sarvam-gpt-elevenlabs-native/) · helpers in [`../sarvam`](../sarvam/) |
-| Speechmatics + GPT + ElevenLabs | Speechmatics | GPT | ElevenLabs | [`speechmatics-gpt-elevenlabs-native`](speechmatics-gpt-elevenlabs-native/) |
+| Speechmatics + GPT + ElevenLabs | Speechmatics Batch | GPT | ElevenLabs | [`speechmatics-gpt-elevenlabs-native`](speechmatics-gpt-elevenlabs-native/) |
 | Deepgram + GPT + Grok TTS | Deepgram Nova | GPT | Grok TTS | [`deepgram-gpt-groktts-native`](deepgram-gpt-groktts-native/) |
 
 ### Platform / framework bridges (already in catalog)
