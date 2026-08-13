@@ -6,6 +6,8 @@ This page gets you from zero to a working outbound test call. Pick one provider 
 
 **API reference:** [Connect Voice AI API](https://docs.exotel.com/exotel-agentstream/connect-voice-ai-api)
 
+**OpenAPI (this repo):** [exotel-connect-voice-ai.yaml](../openapi/exotel-connect-voice-ai.yaml) — direct bot and Connect-with-Flow request shapes for Swagger UI / client codegen.
+
 ## How it works
 
 ```text

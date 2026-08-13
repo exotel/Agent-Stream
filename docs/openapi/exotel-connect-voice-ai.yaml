@@ -1,0 +1,337 @@
+openapi: 3.1.0
+info:
+  title: Exotel Connect Voice AI
+  version: 1.0.0
+  summary: Place outbound calls and connect them to AgentStream voice bots
+  description: |
+    HTTP control APIs for Exotel [AgentStream](https://docs.exotel.com/exotel-agentstream).
+
+    Use **Connect Voice AI** when the call should go straight to your bot WebSocket
+    (`StreamUrl` + `StreamType=bidirectional`).
+
+    Use **Connect Voice AI with Flow** when an App Engine flow should run after answer
+    (greeting, IVR, Voicebot/Stream applet, agent handoff). Pass `Url` to the flow;
+    configure the bot WebSocket inside the Voicebot/Stream applet — not in this request.
+
+    **Not covered here:** AgentStream WebSocket media protocol (see
+    [AGENTSTREAM_WSS_PROTOCOL.md](../AGENTSTREAM_WSS_PROTOCOL.md)) or ExoML / Programmable
+    Legs (gRPC + `POST /legs`).
+
+    Official docs:
+    - [Connect Voice AI API](https://docs.exotel.com/exotel-agentstream/connect-voice-ai-api)
+    - [Connect Voice AI with Flow API](https://docs.exotel.com/exotel-agentstream/connect-voice-ai-with-flow-api)
+  contact:
+    name: Exotel Support
+    email: hello@exotel.com
+    url: https://docs.exotel.com/exotel-agentstream
+
+servers:
+  - url: https://api.in.exotel.com
+    description: Mumbai
+  - url: https://api.exotel.com
+    description: Singapore
+
+tags:
+  - name: Connect Voice AI
+    description: Outbound call → bidirectional AgentStream to your bot
+  - name: Connect Voice AI with Flow
+    description: Outbound call → App Engine flow (Voicebot / Stream / Connect / …)
+
+paths:
+  /v1/Accounts/{AccountSid}/Calls/connect:
+    post:
+      operationId: createConnectCall
+      summary: Place an outbound Connect call
+      description: |
+        Same endpoint supports two modes via mutually exclusive request bodies:
+
+        1. **Direct bot** — require `From`, `CallerId`, `StreamUrl`, `StreamType=bidirectional`
+        2. **Flow** — require `From`, `CallerId`, `Url` (App Engine flow); do **not** send
+           `StreamUrl` / `StreamType` (set those in the Voicebot/Stream applet)
+
+        Returns a Call object immediately while setup continues. Use `StatusCallback`
+        for answered / terminal (and ringing) updates.
+      tags:
+        - Connect Voice AI
+        - Connect Voice AI with Flow
+      security:
+        - basicAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AccountSid"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/ConnectVoiceAIRequest"
+                - $ref: "#/components/schemas/ConnectVoiceAIWithFlowRequest"
+            examples:
+              directBot:
+                summary: Connect Voice AI (direct bot)
+                value:
+                  From: "+919876543210"
+                  CallerId: "0XXXXXXXXXX"
+                  StreamUrl: "wss://your-bot.example.com/media?sample-rate=8000"
+                  StreamType: bidirectional
+                  Record: "false"
+                  StatusCallback: "https://your-server.example.com/callback"
+                  StatusCallbackEvents: ["answered", "terminal"]
+              withFlow:
+                summary: Connect Voice AI with Flow
+                value:
+                  From: "+919876543210"
+                  CallerId: "0XXXXXXXXXX"
+                  Url: "https://my.exotel.com/{AccountSid}/exoml/start_voice/{flow_id}"
+                  Record: "true"
+                  StatusCallback: "https://your-server.example.com/callback"
+                  StatusCallbackEvents: ["terminal"]
+          application/x-www-form-urlencoded:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/ConnectVoiceAIRequest"
+                - $ref: "#/components/schemas/ConnectVoiceAIWithFlowRequest"
+      responses:
+        "200":
+          description: Call accepted; setup may still be in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectCallResponse"
+              example:
+                Call:
+                  Sid: a1b2c3d4e5f6...
+                  Status: in-progress
+                  From: "+91XXXXXXXXXX"
+                  PhoneNumberSid: "0XXXXXXXXXX"
+                  Direction: outbound-api
+                  DateCreated: "2025-06-01 10:00:00"
+                  RecordingUrl: null
+        "400":
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Feature not enabled or forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: |
+        HTTP Basic Auth. Username = **API Key**, password = **API Token**
+        (from the Exotel dashboard).
+
+  parameters:
+    AccountSid:
+      name: AccountSid
+      in: path
+      required: true
+      description: Exotel Account SID
+      schema:
+        type: string
+        example: ExotelAccountSid
+
+  schemas:
+    ConnectVoiceAIRequest:
+      type: object
+      title: Connect Voice AI (direct bot)
+      description: |
+        Dial `From` with `CallerId`, then open bidirectional AgentStream to `StreamUrl`.
+        Append `?sample-rate=8000|16000|24000` on `StreamUrl` when your bot needs a
+        non-default rate. Default on the wire is often 8 kHz PCM16.
+      required:
+        - From
+        - CallerId
+        - StreamUrl
+        - StreamType
+      properties:
+        From:
+          type: string
+          description: Number to dial (E.164)
+          example: "+919876543210"
+        CallerId:
+          type: string
+          description: Your ExoPhone (virtual number) shown as caller ID
+          example: "0XXXXXXXXXX"
+        StreamUrl:
+          type: string
+          maxLength: 600
+          description: |
+            Bot WebSocket URL (`ws://` or `wss://` only). Full URL including query
+            string must be under 600 characters.
+          example: "wss://your-bot.example.com/media?sample-rate=8000"
+        StreamType:
+          type: string
+          enum: [bidirectional]
+          description: "Must be `bidirectional` for two-way audio"
+        Record:
+          type: string
+          enum: ["true", "false"]
+          default: "false"
+          description: "Record the call when `true`"
+        RecordingChannels:
+          type: string
+          enum: [single, dual]
+          default: single
+          description: "`single` = merged; `dual` = separate track per side"
+        TimeLimit:
+          type: integer
+          minimum: 1
+          maximum: 14400
+          description: Max call duration in seconds (up to 4 hours)
+        CustomField:
+          type: string
+          maxLength: 128
+          description: Opaque metadata attached to the call record
+        StatusCallback:
+          type: string
+          format: uri
+          description: HTTPS URL for call status webhooks
+        StatusCallbackEvents:
+          type: array
+          items:
+            type: string
+            enum: [answered, terminal, ringing]
+          description: Events to receive on StatusCallback (leg1)
+        StreamName:
+          type: string
+          maxLength: 32
+          description: Optional label for the stream
+
+    ConnectVoiceAIWithFlowRequest:
+      type: object
+      title: Connect Voice AI with Flow
+      description: |
+        Dial `From`, then run the App Engine flow at `Url`. Configure Voicebot/Stream
+        WebSocket URL inside the flow applets — do not send `StreamUrl` / `StreamType`.
+      required:
+        - From
+        - CallerId
+        - Url
+      properties:
+        From:
+          type: string
+          description: Number to dial (E.164)
+          example: "+919876543210"
+        CallerId:
+          type: string
+          description: Your ExoPhone (virtual number)
+          example: "0XXXXXXXXXX"
+        Url:
+          type: string
+          format: uri
+          description: |
+            Exotel App Engine flow URL, e.g.
+            `https://my.exotel.com/{AccountSid}/exoml/start_voice/{flow_id}`.
+            Custom external URLs are not supported for this parameter.
+          example: "https://my.exotel.com/ExotelAccountSid/exoml/start_voice/12345"
+        CallType:
+          type: string
+          enum: [trans]
+          description: "Use `trans` for transactional calls"
+        Record:
+          type: string
+          enum: ["true", "false"]
+          default: "false"
+        TimeLimit:
+          type: integer
+          minimum: 1
+          maximum: 14400
+          description: Max call duration in seconds (up to 4 hours)
+        TimeOut:
+          type: integer
+          minimum: 1
+          description: Ring timeout in seconds
+        StatusCallback:
+          type: string
+          format: uri
+          description: HTTPS URL for call status webhooks
+        StatusCallbackEvents:
+          type: array
+          items:
+            type: string
+            enum: [answered, terminal, ringing]
+          description: Events to receive on StatusCallback
+        CustomField:
+          type: string
+          maxLength: 128
+          description: Metadata available to applets (e.g. Passthru)
+
+    Call:
+      type: object
+      properties:
+        Sid:
+          type: string
+          description: Unique call ID — store for later lookups
+        Status:
+          $ref: "#/components/schemas/CallStatus"
+        From:
+          type: string
+          description: Number that was dialed
+        PhoneNumberSid:
+          type: string
+          description: ExoPhone / CallerId SID used for the call
+        Direction:
+          type: string
+          example: outbound-api
+        DateCreated:
+          type: string
+          description: Call creation timestamp
+        RecordingUrl:
+          type: ["string", "null"]
+          format: uri
+          description: Recording link after completion when recording was enabled
+
+    CallStatus:
+      type: string
+      enum:
+        - queued
+        - in-progress
+        - completed
+        - failed
+        - busy
+        - no-answer
+      description: |
+        - `queued` — being prepared
+        - `in-progress` — active
+        - `completed` — ended normally
+        - `failed` — could not be placed
+        - `busy` — callee busy
+        - `no-answer` — no answer
+
+    ConnectCallResponse:
+      type: object
+      required: [Call]
+      properties:
+        Call:
+          $ref: "#/components/schemas/Call"
+
+    ErrorResponse:
+      type: object
+      additionalProperties: true
+      description: Error payload shape varies; see Exotel error code reference
+      properties:
+        RestException:
+          type: object
+          additionalProperties: true
+          properties:
+            Status:
+              type: integer
+            Message:
+              type: string
+            Code:
+              type: integer

@@ -4,6 +4,8 @@ Programmatically place a call and stream bidirectional audio to your bot’s Web
 
 **Docs:** [Connect Voice AI API](https://docs.exotel.com/exotel-agentstream/connect-voice-ai-api)
 
+**OpenAPI:** [docs/openapi/exotel-connect-voice-ai.yaml](openapi/exotel-connect-voice-ai.yaml) — import into [Swagger Editor](https://editor.swagger.io/) for Try-it / codegen. See [openapi/README.md](openapi/README.md).
+
 ## Flow
 
 1. Start an integration bridge (see [integrations/](../integrations/)).

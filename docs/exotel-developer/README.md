@@ -2,6 +2,13 @@
 
 Paste these into [Exotel AgentStream](https://docs.exotel.com/exotel-agentstream) (Archbee). Runnable code lives in this repo under `integrations/`.
 
+## OpenAPI
+
+Machine-readable Connect Voice AI + Connect-with-Flow HTTP contract:
+
+- [../openapi/exotel-connect-voice-ai.yaml](../openapi/exotel-connect-voice-ai.yaml)
+- How to view / generate clients — [../openapi/README.md](../openapi/README.md)
+
 ## Suggested nav under AgentStream
 
 1. Overview and Connect Voice AI — [connect-voice-ai.md](connect-voice-ai.md)
