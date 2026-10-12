@@ -145,7 +145,7 @@ async def llm_gemini(text: str) -> str:
 async def tts_cartesia(text: str, sample_rate: int) -> bytes:
     key = os.environ["CARTESIA_API_KEY"]
     voice = os.environ.get("CARTESIA_VOICE_ID") or "a0e99841-438c-4a64-b679-ae501e7d6091"
-    model = os.getenv("CARTESIA_MODEL", "sonic-english")
+    model = os.getenv("CARTESIA_MODEL", "sonic-3.6")
     async with httpx.AsyncClient(timeout=60.0) as client:
         r = await client.post(
             "https://api.cartesia.ai/tts/bytes",
