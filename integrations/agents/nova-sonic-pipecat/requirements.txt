@@ -1,0 +1,8 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-dotenv>=1.0.0
+loguru>=0.7.0
+pipecat-ai[websocket,aws-nova-sonic]>=1.16.0
+# offline test only
+websockets>=13.0
+numpy>=1.26
