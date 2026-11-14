@@ -126,7 +126,7 @@ async def llm_openai(text: str) -> str:
 
 async def llm_gemini(text: str) -> str:
     key = os.environ["GOOGLE_API_KEY"]
-    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     system = os.getenv("SYSTEM_PROMPT", "You are a concise helpful phone assistant.")
     async with httpx.AsyncClient(timeout=60.0) as client:
         r = await client.post(
