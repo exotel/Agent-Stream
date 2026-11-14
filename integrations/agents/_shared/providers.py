@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import audioop
 import asyncio
+import functools
 import io
 import os
 import wave
@@ -124,14 +125,61 @@ async def llm_openai(text: str) -> str:
         return r.json()["choices"][0]["message"]["content"]
 
 
+@functools.lru_cache(maxsize=1)
+def _vertex_adc():
+    """Application Default Credentials and their project, loaded once."""
+    import google.auth  # only the Vertex AI path needs google-auth
+
+    return google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+
+
+def _vertex_auth_headers() -> tuple[dict[str, str], str | None]:
+    """Bearer headers for Vertex AI, plus the ADC project.
+
+    google-auth refreshes tokens with blocking HTTP calls, so run this in a thread.
+    """
+    import google.auth.transport.requests
+    from google.auth.credentials import TokenState
+
+    credentials, project = _vertex_adc()
+    if credentials.token_state != TokenState.FRESH:
+        credentials.refresh(google.auth.transport.requests.Request())
+    headers: dict[str, str] = {}
+    credentials.apply(headers)
+    return headers, project
+
+
+def _vertex_host(location: str) -> str:
+    if location == "global":
+        return "aiplatform.googleapis.com"
+    if location in ("us", "eu"):
+        return f"aiplatform.{location}.rep.googleapis.com"
+    return f"{location}-aiplatform.googleapis.com"
+
+
 async def llm_gemini(text: str) -> str:
-    key = os.environ["GOOGLE_API_KEY"]
-    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
-    system = os.getenv("SYSTEM_PROMPT", "You are a concise helpful phone assistant.")
+    model = os.getenv("GEMINI_MODEL") or "gemini-3.5-flash-lite"
+    system = os.getenv("SYSTEM_PROMPT") or "You are a concise helpful phone assistant."
+    if os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("true", "1"):
+        headers, adc_project = await asyncio.to_thread(_vertex_auth_headers)
+        project = os.getenv("GOOGLE_CLOUD_PROJECT") or adc_project
+        if not project:
+            raise RuntimeError("Set GOOGLE_CLOUD_PROJECT to use Gemini on Vertex AI")
+        location = os.getenv("GOOGLE_CLOUD_LOCATION") or "global"
+        url = (
+            f"https://{_vertex_host(location)}/v1/projects/{project}/locations/{location}"
+            f"/publishers/google/models/{model}:generateContent"
+        )
+        params = None
+    else:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        params = {"key": os.environ["GOOGLE_API_KEY"]}
+        headers = None
     async with httpx.AsyncClient(timeout=60.0) as client:
         r = await client.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            params={"key": key},
+            url,
+            params=params,
+            headers=headers,
             json={
                 "system_instruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": text}]}],

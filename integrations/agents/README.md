@@ -49,6 +49,20 @@ Phone ←→ Exotel AgentStream ←WSS→ FastAPI bot ←→ Voice AI (S2S or ST
 | [`../../docs/CONNECT_VOICE_AI.md`](../../docs/CONNECT_VOICE_AI.md) | API reference |
 | [`../../docs/AGENTSTREAM_WSS_PROTOCOL.md`](../../docs/AGENTSTREAM_WSS_PROTOCOL.md) | WSS events / sample rates |
 
+## Gemini on Vertex AI
+
+The Gemini pipeline recipes call the Gemini API with `GOOGLE_API_KEY`. To call Gemini on Vertex AI instead, set:
+
+| Variable | Value |
+|----------|-------|
+| `GOOGLE_GENAI_USE_VERTEXAI` | `true` |
+| `GOOGLE_CLOUD_PROJECT` | Project ID (optional if your credentials carry one) |
+| `GOOGLE_CLOUD_LOCATION` | `global` (default), `us`, `eu`, or a region listed for your model in [Google's locations table](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations) |
+
+Credentials come from [Application Default Credentials](https://docs.cloud.google.com/docs/authentication/application-default-credentials): `gcloud auth application-default login` locally, or a service account (`GOOGLE_APPLICATION_CREDENTIALS`, or the one attached to the VM). The account needs the `roles/aiplatform.user` role, and the project needs the Vertex AI API (`aiplatform.googleapis.com`) enabled. If your data must stay in a region, set that region rather than `global`.
+
+Offline tests (no network, no credentials): `pip install pytest httpx`, then `python -m pytest integrations/agents/_shared/tests -q` from the repo root.
+
 ## Quick test (any recipe)
 
 ```bash
