@@ -1,0 +1,55 @@
+# Checks on every pull request. Each job prints what to fix when it fails.
+# Jobs marked report only never fail; they show where the repo stands.
+# To run the same checks by hand: Actions > PR checks > Run workflow.
+name: PR checks
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  PR_NUMBER: ${{ github.event.pull_request.number }}
+  PR_BASE_BRANCH: ${{ github.base_ref }}
+jobs:
+  pr-checks:
+    name: Conflict markers, JSON / Python / shell syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python3 ci/pr_checks.py
+  py:
+    name: "Python: real lint errors fail the check; tests report only"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: bash ci/lang_python.sh
+  js:
+    name: "JavaScript: syntax fails the check; npm lint and test report only"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - run: bash ci/lang_node.sh
